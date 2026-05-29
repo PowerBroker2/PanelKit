@@ -32,7 +32,12 @@ public:
         link(parentRegistry);
     }
 
-    virtual ~BaseComponent() {}
+    virtual ~BaseComponent()
+    {
+        if (registry != nullptr)
+            registry->unregisterComponent(this);
+    }
+
     virtual void activate()   = 0;
     virtual void deactivate() = 0;
 
