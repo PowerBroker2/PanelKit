@@ -4,4 +4,5 @@
 #include "PixelPlanner.h"
 #include "Events.h"
 #include "Component.h"
+#include "Panel.h"
 #include "Button.h"

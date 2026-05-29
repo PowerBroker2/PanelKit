@@ -6,3 +6,9 @@ struct Coord
     int x;
     int y;
 };
+
+struct Dimension
+{
+    int dx;
+    int dy;
+};

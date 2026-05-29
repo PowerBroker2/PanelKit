@@ -1,105 +1,63 @@
 #pragma once
 #include <Arduino.h>
 #include <Callback.h>
+#include "PixelPlanner.h"
 #include "Events.h"
 #include "Utils.h"
+#include "Layout.h"
 
-template <size_t WIDTH, size_t HEIGHT>
-class Component
+class BaseComponent
 {
-private:
-    Coord ulhc;
+protected:
+    Coord     ulhc; 
+    Dimension dim;
+    
+    BaseComponent* nextSibling  = nullptr; 
+    LayoutManager* parentLayout = nullptr; 
 
-    int order = 0; // 0 is top, 1 is a layer below, etc.
-
+    int order = 0; 
     bool active = false;
 
-    void handleEvent(Event e)
+    friend class LayoutManager;
+
+public:
+    BaseComponent(LayoutManager* parent = nullptr)
     {
-        if (active)
+        if (parent != nullptr) 
         {
-            Serial.println("Active");
-            Serial.println("Event");
-            Serial.println(e.timestamp);
-            Serial.println((int)e.type);
-            Serial.println(e.character);
-            Serial.println(e.startX);
-            Serial.println(e.startY);
-            Serial.println(e.endX);
-            Serial.println(e.endY);
-            Serial.println(e.direction);
-
-            if (inBounds(e.startX, e.startY))
-            {
-                Serial.println("In Bounds");
-            }
-            else
-            {
-                Serial.println("Out of Bounds");
-            }
+            this->parentLayout = parent;
+            parent->registerChild(this); 
         }
-        else
-        {
-            Serial.println("Inactive");
-        }
+    }
 
-        Serial.println();
-    };
+    virtual ~BaseComponent() {}
+    virtual void activate()   = 0;
+    virtual void deactivate() = 0;
 
+    void setOrder(unsigned int orderVal) { order = (orderVal < 0) ? 0 : orderVal; }
+    int getOrder() const { return order; }
+    void setLoc(int x, int y)  { ulhc.x = x; ulhc.y = y; }
+    Coord getLoc()             { return ulhc; }
+    
+    bool inBounds(int x, int y)
+    {
+        int minX = ulhc.x; int minY = ulhc.y;
+        int maxX = ulhc.x + dim.dx; int maxY = ulhc.y + dim.dy;
+        return ((x <= maxX) && (x >= minX) && (y <= maxY) && (y >= minY));
+    }
+};
+
+template <size_t WIDTH, size_t HEIGHT>
+class Component : public BaseComponent
+{
 public:
     Component()
     {
-        eventOccured.attach(MethodSlot<Component, Event>(this, &Component::handleEvent));
+        dim.dx = WIDTH;
+        dim.dy = HEIGHT;
     }
-
-    void setLoc(int x, int y)
-    {
-        ulhc.x = x;
-        ulhc.y = y;
-    }
-
-    Coord getLoc(int x, int y)
-    {
-        return ulhc;
-    }
-
-    void nudge(int dx, int dy)
-    {
-        ulhc.x += dx;
-        ulhc.y += dy;
-    }
-
-    bool inBounds(int x, int y)
-    {
-        // Account for pixmap's offset on screen
-        return pixmap.inBounds(x - ulhc.x, y - ulhc.y);
-    }
-
-    void activate()
-    {
-        active = true;
-
-        // Do something with pixmap?
-    };
-
-    void deactivate()
-    {
-        active = false;
-
-        // Do something with pixmap?
-    };
-
-    void setOrder(unsigned int orderVal)
-    {
-        if (orderVal < 0)
-        {
-            order = 0;
-        }
-        else
-        {
-            order = orderVal;
-        }
-    };
+    void activate() override   { active = true; }
+    void deactivate() override { active = false; }
 
     Pixmap<WIDTH, HEIGHT> pixmap;
 };
