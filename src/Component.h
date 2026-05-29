@@ -4,37 +4,64 @@
 #include "PixelPlanner.h"
 #include "Events.h"
 #include "Utils.h"
-#include "Layout.h"
+#include "Registry.h"
+
+const int MAX_NAME_SIZE = 25;
 
 class BaseComponent
 {
 protected:
-    Coord     ulhc; 
+    char name[MAX_NAME_SIZE] = {'\0'};
+
+    Coord     ulhc;
     Dimension dim;
     
-    BaseComponent* nextSibling  = nullptr; 
-    LayoutManager* parentLayout = nullptr; 
+    BaseComponent*     nextSibling  = nullptr;
+    BaseComponent*     prevSibling  = nullptr;
+    ComponentRegistry* registry     = nullptr;
 
-    int order = 0; 
-    bool active = false;
+    int order       = 0; 
+    bool active     = false;
+    bool registered = false;
 
-    friend class LayoutManager;
+    friend class ComponentRegistry;
 
 public:
-    BaseComponent(LayoutManager* parent = nullptr)
+    BaseComponent(ComponentRegistry* parentRegistry = nullptr)
     {
-        if (parent != nullptr) 
-        {
-            this->parentLayout = parent;
-            parent->registerChild(this); 
-        }
+        link(parentRegistry);
     }
 
     virtual ~BaseComponent() {}
     virtual void activate()   = 0;
     virtual void deactivate() = 0;
 
-    void setOrder(unsigned int orderVal) { order = (orderVal < 0) ? 0 : orderVal; }
+    void link(ComponentRegistry* parentRegistry)
+    {
+        if ((parentRegistry != nullptr) && (!registered))
+        {
+            this->registry = parentRegistry;
+            parentRegistry->registerComponent(this); 
+            registered = true;
+        }
+    }
+
+    void setName(const char* newName) 
+    {
+        if (newName == nullptr)
+            return;
+
+        strlcpy(name, newName, MAX_NAME_SIZE);
+    }
+
+    void setOrder(unsigned int orderVal)
+    {
+        order = (orderVal < 0) ? 0 : orderVal;
+
+        if ((registry != nullptr) && registered)
+            registry->updateOrder();
+    }
+
     int getOrder() const { return order; }
     void setLoc(int x, int y)  { ulhc.x = x; ulhc.y = y; }
     Coord getLoc()             { return ulhc; }
@@ -51,7 +78,7 @@ template <size_t WIDTH, size_t HEIGHT>
 class Component : public BaseComponent
 {
 public:
-    Component()
+    Component(ComponentRegistry* parentRegistry = nullptr) : BaseComponent(parentRegistry)
     {
         dim.dx = WIDTH;
         dim.dy = HEIGHT;
