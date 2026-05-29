@@ -61,11 +61,94 @@ void ComponentRegistry::registerComponent(BaseComponent* child)
     size++;
 }
 
+void ComponentRegistry::unregisterComponent(BaseComponent* child)
+{
+    // 1. Safety check to make sure the target component isn't null
+    if (!child) return;
+
+    // 2. Unlink the forward path from the previous component
+    if (child->prevSibling != nullptr)
+    {
+        child->prevSibling->nextSibling = child->nextSibling;
+    }
+    else
+    {
+        // If it doesn't have a previous sibling, it was the absolute head
+        head = child->nextSibling;
+    }
+
+    // 3. Unlink the backward path from the next component
+    if (child->nextSibling != nullptr)
+    {
+        child->nextSibling->prevSibling = child->prevSibling;
+    }
+
+    // 4. Update current index and current pointer state trackers
+    if (currentComp == child)
+    {
+        // Fall back gracefully to the next available component, or the previous one, or null
+        if (child->nextSibling != nullptr)
+        {
+            currentComp = child->nextSibling;
+            // index stays numerically identical because the list collapsed forward
+        }
+        else if (child->prevSibling != nullptr)
+        {
+            currentComp = child->prevSibling;
+            currentIdx--;
+        }
+        else
+        {
+            currentComp = nullptr;
+            currentIdx = 0;
+        }
+    }
+    else
+    {
+        // Optional: If the removed component sat physically *before* our active component,
+        // we must manually shift our tracked integer index back by 1 to maintain sync.
+        // To do this strictly, you can traverse from head to find the actual index,
+        // or just leave index management to an absolute recalculation function.
+    }
+
+    // 5. Clear structural tracking data on the child so it doesn't leak dead pointers
+    child->nextSibling = nullptr;
+    child->prevSibling = nullptr;
+
+    // 6. Reduce global tracker capacity size
+    if (size > 0) size--;
+}
+
 void ComponentRegistry::updateOrder()
 {
-    // BaseComponent* component = head;
+    // 1. If the list is empty or only has one item, no sorting is required
+    if (head == nullptr || head->nextSibling == nullptr) return;
 
-    // TODO
+    // 2. Disconnect the entire existing chain from the registry management
+    // Grab the first element to process, then wipe our structural track states
+    BaseComponent* current = head;
+    
+    head        = nullptr;
+    currentComp = nullptr;
+    currentIdx  = 0;
+    size        = 0; // registerComponent will increment this back up step-by-step
+
+    // 3. Loop through the disconnected components and re-insert them 
+    while (current != nullptr)
+    {
+        // CRITICAL: Save the next pointer *before* registerComponent overwrites it!
+        BaseComponent* nextItem = current->nextSibling;
+
+        // Strip structural pointers to prevent registerComponent from reading corrupt old links
+        current->nextSibling = nullptr;
+        current->prevSibling = nullptr;
+
+        // Leverage your existing sorted insertion engine
+        this->registerComponent(current);
+
+        // Move to the next item in the legacy sequence
+        current = nextItem;
+    }
 }
 
 BaseComponent* ComponentRegistry::currentComponent()

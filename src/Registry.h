@@ -16,6 +16,7 @@ public:
     ComponentRegistry();
 
     void registerComponent(BaseComponent* child);
+    void unregisterComponent(BaseComponent* child);
     void updateOrder();
     BaseComponent* currentComponent();
     BaseComponent* nextComponent();
