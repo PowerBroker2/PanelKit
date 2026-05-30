@@ -23,7 +23,8 @@ struct Event
 };
 
 // Declare that the signal exists globally
-extern Signal<Event> eventOccured;
+// extern Signal<Event> eventOccured;
+Signal<Event>& getEventSignal();
 
 // Declare function prototypes (Note: Default parameters must remain in the header)
 void click(int x, int y);

@@ -40,9 +40,8 @@ private:
     };
 
 public:
-    Panel()
+    Panel(ComponentRegistry* parentRegistry = nullptr) : Component<WIDTH, HEIGHT>(parentRegistry), ComponentRegistry()
     {
-        eventOccured.attach(MethodSlot<Panel<WIDTH, HEIGHT>, Event>(this, &Panel<WIDTH, HEIGHT>::handleEvent));
+        getEventSignal().attach(MethodSlot<Panel<WIDTH, HEIGHT>, Event>(this, &Panel<WIDTH, HEIGHT>::handleEvent));
     };
-
 };

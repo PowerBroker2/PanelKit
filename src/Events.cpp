@@ -1,6 +1,12 @@
 #include "Events.h"
 
-Signal<Event> eventOccured;
+// Signal<Event> eventOccured();
+Signal<Event>& getEventSignal()
+{
+    // This is built safely the absolute first time any code runs getEventSignal()
+    static Signal<Event> instance; 
+    return instance;
+}
 
 void click(int x, int y)
 {
@@ -13,7 +19,8 @@ void click(int x, int y)
     e.endX      = x;
     e.endY      = y;
     e.direction = 0;
-    eventOccured.fire(e);
+    getEventSignal().fire(e);
+    Serial.println("fire");
 }
 
 void doubleClick(int x, int y)
@@ -27,7 +34,7 @@ void doubleClick(int x, int y)
     e.endX      = x;
     e.endY      = y;
     e.direction = 0;
-    eventOccured.fire(e);
+    getEventSignal().fire(e);
 }
 
 void scroll(int x, int y, float direction)
@@ -41,7 +48,7 @@ void scroll(int x, int y, float direction)
     e.endX      = x;
     e.endY      = y;
     e.direction = direction;
-    eventOccured.fire(e);
+    getEventSignal().fire(e);
 }
 
 void type(char c, int x, int y)
@@ -55,7 +62,7 @@ void type(char c, int x, int y)
     e.endX      = x;
     e.endY      = y;
     e.direction = 0;
-    eventOccured.fire(e);
+    getEventSignal().fire(e);
 }
 
 void press(int x, int y)
@@ -69,7 +76,7 @@ void press(int x, int y)
     e.endX      = x;
     e.endY      = y;
     e.direction = 0;
-    eventOccured.fire(e);
+    getEventSignal().fire(e);
 }
 
 void release(int x, int y)
@@ -83,7 +90,7 @@ void release(int x, int y)
     e.endX      = x;
     e.endY      = y;
     e.direction = 0;
-    eventOccured.fire(e);
+    getEventSignal().fire(e);
 }
 
 void drag(int startX, int startY, int endX, int endY)
@@ -97,5 +104,5 @@ void drag(int startX, int startY, int endX, int endY)
     e.endX      = endX;
     e.endY      = endY;
     e.direction = atan2(endY - startY, endX - startX) * 180.0 / M_PI;
-    eventOccured.fire(e);
+    getEventSignal().fire(e);
 }
