@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include "Events.h"
 
-class BaseComponent; 
+class BaseComponent;
 
 class ComponentRegistry
 {
