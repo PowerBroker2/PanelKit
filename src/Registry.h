@@ -19,8 +19,9 @@ public:
     void unregisterComponent(BaseComponent* child);
     void updateOrder();
     BaseComponent* currentComponent();
-    BaseComponent* nextComponent();
-    BaseComponent* prevComponent();
-    BaseComponent* getComponentByIdx(int idx);
-    BaseComponent* getComponentByName(char* name);
+    void loadHeadComponent();
+    void loadNextComponent();
+    void loadPrevComponent();
+    void loadComponentByIdx(int idx);
+    void loadComponentByName(char* name);
 };

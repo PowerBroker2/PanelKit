@@ -34,8 +34,7 @@ public:
 
     virtual ~BaseComponent()
     {
-        if (registry != nullptr)
-            registry->unregisterComponent(this);
+        unlink();
     }
 
     virtual void activate()   = 0;
@@ -51,12 +50,27 @@ public:
         }
     }
 
+    void unlink()
+    {
+        if (registry != nullptr)
+        {
+            registry->unregisterComponent(this);
+            registry   = nullptr;
+            registered = false;
+        }
+    }
+
     void setName(const char* newName) 
     {
         if (newName == nullptr)
             return;
 
         strlcpy(name, newName, MAX_NAME_SIZE);
+    }
+
+    char* getName() 
+    {
+        return name;
     }
 
     void setOrder(unsigned int orderVal)

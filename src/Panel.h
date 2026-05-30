@@ -4,7 +4,7 @@
 #include "Component.h"
 
 template <size_t WIDTH, size_t HEIGHT>
-class Panel : public Component<WIDTH, HEIGHT>
+class Panel : public Component<WIDTH, HEIGHT>, public ComponentRegistry
 {
 private:
     void handleEvent(Event e)
