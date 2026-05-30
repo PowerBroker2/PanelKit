@@ -27,6 +27,9 @@ void setup()
     btn2.setLoc(0, 50);
     btn2.activate();
 
+    panel.setLoc(25, 60);
+    panel.activate();
+
 
     display.clear();
 
@@ -56,11 +59,13 @@ void setup()
     panel.loadNextComponent();
     Serial.println(panel.currentComponent()->getName());
     Serial.println();
+
+    delay(2000);
 }
 
 void loop()
 {
     press(0, 0);
     click(25, 60);
-    delay(500);
+    delay(1000);
 }
