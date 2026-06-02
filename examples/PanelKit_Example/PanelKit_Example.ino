@@ -12,7 +12,7 @@ PanelButton<60, 60> btn2;
 void setup()
 {
     Serial.begin(115200);
-    display.begin(80000000, 1);
+    display.begin();
 
 
     btn.setName("btn");
@@ -65,7 +65,8 @@ void setup()
 
 void loop()
 {
-    press(0, 0);
-    click(25, 60);
-    delay(1000);
+    if (display.touched())
+    {
+        click(display.touchX(), display.touchY());
+    }
 }
