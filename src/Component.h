@@ -91,9 +91,11 @@ public:
         int minY = ulhc.y;
         int maxX = ulhc.x + dim.dx;
         int maxY = ulhc.y + dim.dy;
-        
+
         return ((x <= maxX) && (x >= minX) && (y <= maxY) && (y >= minY));
     }
+
+    virtual void handleEvent(Event e) {};
 };
 
 template <size_t WIDTH, size_t HEIGHT>

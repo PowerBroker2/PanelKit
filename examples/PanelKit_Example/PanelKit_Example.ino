@@ -9,6 +9,16 @@ Panel<200, 200> panel;
 PanelButton<60, 60> btn;
 PanelButton<60, 60> btn2;
 
+void btnCallback()
+{
+    Serial.println("btn --- hi");
+}
+
+void btn2Callback()
+{
+    Serial.println("btn2 --- hi");
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -19,12 +29,14 @@ void setup()
     btn.link(&panel);
     btn.pixmap.draw_circle(50, 50, 5, 0, true, ORANGE);
     btn.setLoc(20, 50);
+    btn.onClick(btnCallback);
     btn.activate();
 
     btn2.setName("btn2");
     btn2.link(&panel);
     btn2.pixmap.draw_circle(50, 50, 5, 0, true, RED);
     btn2.setLoc(0, 50);
+    btn2.onClick(btn2Callback);
     btn2.activate();
 
     panel.setLoc(25, 60);

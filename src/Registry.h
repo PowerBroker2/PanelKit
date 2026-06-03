@@ -6,7 +6,7 @@ class BaseComponent;
 
 class ComponentRegistry
 {
-private:
+protected:
     BaseComponent* head        = nullptr;
     BaseComponent* currentComp = nullptr;
     int            currentIdx  = 0;
@@ -19,6 +19,7 @@ public:
     void unregisterComponent(BaseComponent* child);
     void updateOrder();
     BaseComponent* currentComponent();
+    BaseComponent* headComponent();
     void loadHeadComponent();
     void loadNextComponent();
     void loadPrevComponent();

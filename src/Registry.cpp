@@ -140,10 +140,16 @@ BaseComponent* ComponentRegistry::currentComponent()
     return currentComp;
 }
 
+
+BaseComponent* ComponentRegistry::headComponent()
+{
+    return head;
+}
+
 void ComponentRegistry::loadHeadComponent()
 {
     currentComp = head;
-    currentIdx = 0;
+    currentIdx  = 0;
 }
 
 void ComponentRegistry::loadNextComponent()

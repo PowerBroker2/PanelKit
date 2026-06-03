@@ -6,8 +6,8 @@
 template <size_t WIDTH, size_t HEIGHT>
 class Panel : public Component<WIDTH, HEIGHT>, public ComponentRegistry
 {
-private:
-    void handleEvent(Event e)
+protected:
+    void handleEvent(Event e) override
     {
         if (this->active)
         {
@@ -25,6 +25,27 @@ private:
             if (this->inBounds(e.startX, e.startY))
             {
                 Serial.println("In Bounds");
+
+                this->loadHeadComponent();
+
+                for (int i = 0; i < this->size; i++)
+                {
+                    auto comp = currentComponent();
+
+                    if (comp->inBounds(e.startX, e.startY))
+                    {
+                        Serial.print(comp->getName());
+                        Serial.println(" In Bounds");
+                        comp->handleEvent(e);
+                    }
+                    else
+                    {
+                        Serial.print(comp->getName());
+                        Serial.println(" Out of Bounds");
+                    }
+
+                    this->loadNextComponent();
+                }
             }
             else
             {
