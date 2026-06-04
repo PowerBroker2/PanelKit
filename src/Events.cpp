@@ -1,9 +1,7 @@
 #include "Events.h"
 
-// Signal<Event> eventOccured();
 Signal<Event>& getEventSignal()
 {
-    // This is built safely the absolute first time any code runs getEventSignal()
     static Signal<Event> instance; 
     return instance;
 }
