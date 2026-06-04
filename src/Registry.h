@@ -18,6 +18,8 @@ public:
     void registerComponent(BaseComponent* child);
     void unregisterComponent(BaseComponent* child);
     void updateOrder();
+    int  numComps();
+    int  currentIndex();
     BaseComponent* currentComponent();
     BaseComponent* headComponent();
     void loadHeadComponent();

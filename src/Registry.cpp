@@ -135,6 +135,16 @@ void ComponentRegistry::updateOrder()
     }
 }
 
+int ComponentRegistry::numComps()
+{
+    return size;
+}
+
+int ComponentRegistry::currentIndex()
+{
+    return currentIdx;
+}
+
 BaseComponent* ComponentRegistry::currentComponent()
 {
     return currentComp;

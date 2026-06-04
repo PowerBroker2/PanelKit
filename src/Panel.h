@@ -26,11 +26,13 @@ protected:
             {
                 Serial.println("In Bounds");
 
-                this->loadHeadComponent();
+                loadHeadComponent();
+                auto comp = currentComponent();
 
-                for (int i = 0; i < this->size; i++)
+                while (true)
                 {
-                    auto comp = currentComponent();
+                    if (comp == nullptr)
+                        break;
 
                     if (comp->inBounds(e.startX, e.startY))
                     {
@@ -44,7 +46,11 @@ protected:
                         Serial.println(" Out of Bounds");
                     }
 
-                    this->loadNextComponent();
+                    loadNextComponent();
+                    comp = currentComponent();
+
+                    if (comp == headComponent())
+                        break;
                 }
             }
             else
