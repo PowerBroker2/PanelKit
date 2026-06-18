@@ -1,5 +1,6 @@
 #include "TeensyTFT.h"
 #include "PanelKit.h"
+#include "font_roboto_regular_50.h"
 
 // TFT display
 TeensyTFT display(10, 9, 255);
@@ -27,7 +28,9 @@ void setup()
 
     btn.setName("btn");
     btn.link(&panel);
-    btn.pixmap.draw_circle(50, 50, 5, 0, true, ORANGE);
+
+    btn.pixmap.print(0, 0, "Hia?", font_roboto_regular_50::Font, ORANGE, 20, 0.20);
+
     btn.setLoc(20, 50);
     btn.onClick(btnCallback);
     btn.activate();
@@ -35,7 +38,7 @@ void setup()
     btn2.setName("btn2");
     btn2.link(&panel);
     btn2.pixmap.draw_circle(50, 50, 5, 0, true, RED);
-    btn2.setLoc(0, 50);
+    btn2.setLoc(0, 100);
     btn2.onClick(btn2Callback);
     btn2.activate();
 
