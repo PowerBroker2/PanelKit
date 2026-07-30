@@ -104,3 +104,18 @@ void drag(int startX, int startY, int endX, int endY)
     e.direction = atan2(endY - startY, endX - startX) * 180.0 / M_PI;
     getEventSignal().fire(e);
 }
+
+const char* eventTypeToString(EventType type)
+{
+    switch (type)
+    {
+        case EventType::CLICK:        return "CLICK";
+        case EventType::DOUBLE_CLICK: return "DOUBLE_CLICK";
+        case EventType::SCROLL:       return "SCROLL";
+        case EventType::TYPE:         return "TYPE";
+        case EventType::PRESS:        return "PRESS";
+        case EventType::RELEASE:      return "RELEASE";
+        case EventType::DRAG:         return "DRAG";
+        default:                      return "UNKNOWN";
+    }
+}

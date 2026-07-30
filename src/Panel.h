@@ -9,61 +9,66 @@ class Panel : public Component<WIDTH, HEIGHT>, public ComponentRegistry
 protected:
     void handleEvent(Event e) override
     {
-        if (this->active)
+        if (!this->active)
         {
-            Serial.println("Active");
-            Serial.println("Event");
-            Serial.println(e.timestamp);
-            Serial.println((int)e.type);
-            Serial.println(e.character);
-            Serial.println(e.startX);
-            Serial.println(e.startY);
-            Serial.println(e.endX);
-            Serial.println(e.endY);
-            Serial.println(e.direction);
+            Serial.println("[Panel] Inactive - Event ignored.");
+            return;
+        }
 
-            if (this->inBounds(e.startX, e.startY))
+        // --- Event Summary Header ---
+        Serial.println("==================== [ PANEL EVENT ] ====================");
+        Serial.print("Type:      "); Serial.println(eventTypeToString(e.type));
+        Serial.print("Timestamp: "); Serial.print(e.timestamp); Serial.println(" us");
+        Serial.print("Start Pos: ("); Serial.print(e.startX); Serial.print(", "); Serial.print(e.startY); Serial.println(")");
+
+        // Print extra details only if applicable to event type
+        if (e.type == EventType::DRAG)
+        {
+            Serial.print("End Pos:   ("); Serial.print(e.endX); Serial.print(", "); Serial.print(e.endY); Serial.println(")");
+            Serial.print("Direction: "); Serial.print(e.direction); Serial.println(" deg");
+        }
+        else if (e.type == EventType::TYPE)
+        {
+            Serial.print("Character: '"); Serial.print(e.character); Serial.println("'");
+        }
+
+        // --- Bounds & Routing Logic ---
+        if (this->inBounds(e.startX, e.startY))
+        {
+            Serial.println("Panel:     IN BOUNDS -> Dispatching to components...");
+
+            loadHeadComponent();
+            auto comp = currentComponent();
+
+            while (comp != nullptr)
             {
-                Serial.println("In Bounds");
+                Serial.print("  |-- Child [");
+                Serial.print(comp->getName() ? comp->getName() : "Unnamed");
+                Serial.print("]: ");
 
-                loadHeadComponent();
-                auto comp = currentComponent();
-
-                while (true)
+                if (comp->inBounds(e.startX, e.startY))
                 {
-                    if (comp == nullptr)
-                        break;
-
-                    if (comp->inBounds(e.startX, e.startY))
-                    {
-                        Serial.print(comp->getName());
-                        Serial.println(" In Bounds");
-                        comp->handleEvent(e);
-                    }
-                    else
-                    {
-                        Serial.print(comp->getName());
-                        Serial.println(" Out of Bounds");
-                    }
-
-                    loadNextComponent();
-                    comp = currentComponent();
-
-                    if (comp == headComponent())
-                        break;
+                    Serial.println("IN BOUNDS -> Forwarding event");
+                    comp->handleEvent(e);
                 }
-            }
-            else
-            {
-                Serial.println("Out of Bounds");
+                else
+                {
+                    Serial.println("OUT OF BOUNDS");
+                }
+
+                loadNextComponent();
+                comp = currentComponent();
+
+                if (comp == headComponent())
+                    break;
             }
         }
         else
         {
-            Serial.println("Inactive");
+            Serial.println("Panel:     OUT OF BOUNDS");
         }
 
-        Serial.println();
+        Serial.println("=========================================================\n");
     };
 
 public:

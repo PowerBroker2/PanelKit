@@ -10,6 +10,8 @@ Panel<200, 200> panel;
 PanelButton<60, 60> btn;
 PanelButton<60, 60> btn2;
 
+TouchProcessor touchProcessor;
+
 void btnCallback()
 {
     Serial.println("btn --- hi");
@@ -80,8 +82,7 @@ void setup()
 
 void loop()
 {
-    if (display.touched())
-    {
-        click(display.touchX(), display.touchY());
-    }
+    touchProcessor.process(display.touched(),
+                           display.touchX(),
+                           display.touchY());
 }
