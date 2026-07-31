@@ -57,8 +57,9 @@ private:
     int           dragThresholdSq;  // Pre-calculated squared radius for fast distance checks
     unsigned long doubleClickTimeUs; // Timeout in microseconds
 
-    // Emission configuration
+    // Mode configurations
     bool          autoEmit;
+    bool          deferredClickMode; // false = Immediate Mode, true = Deferred (Mutually Exclusive)
 
     // Internal fixed buffer for frame events (no dynamic allocation)
     static constexpr size_t MAX_BUFFER_SIZE = 4;
@@ -90,7 +91,7 @@ private:
     }
 
 public:
-    TouchProcessor(bool autoEmitEvents = true, int dragThreshold = 10, unsigned long doubleClickMs = 300)
+    TouchProcessor(bool autoEmitEvents = true, int dragThreshold = 10, unsigned long doubleClickMs = 300, bool deferredClicks = false)
         : wasTouched(false),
           startX(0), startY(0),
           lastX(0), lastY(0),
@@ -102,6 +103,7 @@ public:
           dragThresholdSq(dragThreshold * dragThreshold),
           doubleClickTimeUs(doubleClickMs * 1000UL),
           autoEmit(autoEmitEvents),
+          deferredClickMode(deferredClicks),
           eventCount(0)
     {}
 
@@ -109,6 +111,19 @@ public:
     void setAutoEmit(bool enable) { autoEmit = enable; }
     bool getAutoEmit() const { return autoEmit; }
     
+    // Toggle between Immediate (false) and Deferred (true) click modes
+    void setDeferredClickMode(bool enable) 
+    { 
+        // If turning off deferred mode while a click is pending, flush it immediately
+        if (!enable && deferredClickMode && hasPendingClick)
+        {
+            queueEvent(createEvent(EventType::CLICK, lastClickX, lastClickY, lastClickX, lastClickY));
+            hasPendingClick = false;
+        }
+        deferredClickMode = enable; 
+    }
+    bool getDeferredClickMode() const { return deferredClickMode; }
+
     void setDragThreshold(int pixels) 
     { 
         dragThresholdPixels = pixels; 
@@ -129,7 +144,6 @@ public:
         return nullptr;
     }
 
-    // Pop the oldest event out of the buffer
     bool popEvent(Event& outEvent)
     {
         if (eventCount == 0) return false;
@@ -143,7 +157,6 @@ public:
         return true;
     }
 
-    // Manually emit all queued events to global signal and clear buffer
     void emitPendingEvents()
     {
         for (size_t i = 0; i < eventCount; ++i)
@@ -153,7 +166,6 @@ public:
         eventCount = 0;
     }
 
-    // Clear buffer without emitting
     void clearEvents()
     {
         eventCount = 0;
@@ -162,9 +174,7 @@ public:
     // --- Main Gesture State Machine ---
     void process(bool isTouched, int x, int y)
     {
-        // Reset frame buffer
         eventCount = 0;
-
         const unsigned long now = micros();
 
         // 1. TOUCH STARTED (UNTOUCHED -> TOUCHED)
@@ -177,12 +187,25 @@ public:
             lastY      = y;
             isDragging = false;
 
+            // In deferred mode, flush pending click if new touch starts far away
+            if (deferredClickMode && hasPendingClick)
+            {
+                const int clickDistX  = x - lastClickX;
+                const int clickDistY  = y - lastClickY;
+                const int clickDistSq = (clickDistX * clickDistX) + (clickDistY * clickDistY);
+
+                if (clickDistSq > dragThresholdSq)
+                {
+                    queueEvent(createEvent(EventType::CLICK, lastClickX, lastClickY, lastClickX, lastClickY));
+                    hasPendingClick = false;
+                }
+            }
+
             queueEvent(createEvent(EventType::PRESS, x, y, x, y));
         }
         // 2. TOUCH CONTINUING (Evaluate Drag)
         else if (isTouched && wasTouched)
         {
-            // Evaluate Radial Touch Slop (squared distance check)
             if (!isDragging)
             {
                 const int dx = x - startX;
@@ -190,12 +213,16 @@ public:
                 
                 if ((dx * dx + dy * dy) > dragThresholdSq)
                 {
-                    isDragging      = true;
-                    hasPendingClick = false; // Invalidate double-click tracking on drag start
+                    isDragging = true;
+                    
+                    if (deferredClickMode && hasPendingClick)
+                    {
+                        queueEvent(createEvent(EventType::CLICK, lastClickX, lastClickY, lastClickX, lastClickY));
+                        hasPendingClick = false;
+                    }
                 }
             }
 
-            // Fire DRAG events only when coordinate changes occur
             if (isDragging)
             {
                 if (x != lastX || y != lastY)
@@ -213,10 +240,8 @@ public:
         else if (!isTouched && wasTouched)
         {
             wasTouched = false;
-
             queueEvent(createEvent(EventType::RELEASE, lastX, lastY, lastX, lastY));
 
-            // Evaluate Click vs Double Click
             if (!isDragging)
             {
                 const int clickDistX  = lastX - lastClickX;
@@ -227,21 +252,44 @@ public:
                     (now - lastClickTime <= doubleClickTimeUs) && 
                     (clickDistSq <= dragThresholdSq))
                 {
+                    // Confirmed DOUBLE CLICK -> Emit double click and clear pending state
                     queueEvent(createEvent(EventType::DOUBLE_CLICK, lastX, lastY, lastX, lastY));
-                    hasPendingClick = false; // Prevent triple-clicks from re-triggering
+                    hasPendingClick = false;
                 }
                 else
                 {
-                    queueEvent(createEvent(EventType::CLICK, lastX, lastY, lastX, lastY));
-                    hasPendingClick = true;
-                    lastClickTime   = now;
-                    lastClickX      = lastX;
-                    lastClickY      = lastY;
+                    if (deferredClickMode)
+                    {
+                        // Deferred Mode: Flush older pending click, store new one for timeout
+                        if (hasPendingClick)
+                        {
+                            queueEvent(createEvent(EventType::CLICK, lastClickX, lastClickY, lastClickX, lastClickY));
+                        }
+                        hasPendingClick = true;
+                        lastClickTime   = now;
+                        lastClickX      = lastX;
+                        lastClickY      = lastY;
+                    }
+                    else
+                    {
+                        // Immediate Mode: Fire CLICK right now, store metadata for double-click check
+                        queueEvent(createEvent(EventType::CLICK, lastX, lastY, lastX, lastY));
+                        hasPendingClick = true;
+                        lastClickTime   = now;
+                        lastClickX      = lastX;
+                        lastClickY      = lastY;
+                    }
                 }
             }
         }
 
-        // Emit at the end of process() if autoEmit is enabled
+        // 4. TIMED EXPIRATION (Deferred mode only)
+        if (deferredClickMode && hasPendingClick && (now - lastClickTime > doubleClickTimeUs))
+        {
+            queueEvent(createEvent(EventType::CLICK, lastClickX, lastClickY, lastClickX, lastClickY));
+            hasPendingClick = false;
+        }
+
         if (autoEmit)
         {
             emitPendingEvents();
