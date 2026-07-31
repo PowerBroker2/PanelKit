@@ -1,88 +1,77 @@
 #include "TeensyTFT.h"
 #include "PanelKit.h"
+#include "Button.h"
 #include "font_roboto_regular_50.h"
 
-// TFT display
 TeensyTFT display(10, 9, 255);
-
 Panel<200, 200> panel;
 
-PanelButton<60, 60> btn;
-PanelButton<60, 60> btn2;
+PanelButton<120, 50> btnOk;
+PanelButton<120, 50> btnCancel;
 
 TouchProcessor touchProcessor;
 
-void btnCallback()
-{
-    Serial.println("btn --- hi");
+void onOkClicked() {
+    Serial.println("OK Button Clicked!");
 }
 
-void btn2Callback()
-{
-    Serial.println("btn2 --- hi");
+void onCancelClicked() {
+    Serial.println("Cancel Button Clicked!");
 }
 
-void setup()
-{
+void setup() {
     Serial.begin(115200);
     display.begin();
 
-
-    btn.setName("btn");
-    btn.link(&panel);
-
-    btn.pixmap.print(0, 0, "Hia?", font_roboto_regular_50::Font, ORANGE, 20, 0.20);
-
-    btn.setLoc(20, 50);
-    btn.onClick(btnCallback);
-    btn.activate();
-
-    btn2.setName("btn2");
-    btn2.link(&panel);
-    btn2.pixmap.draw_circle(50, 50, 5, 0, true, RED);
-    btn2.setLoc(0, 100);
-    btn2.onClick(btn2Callback);
-    btn2.activate();
-
-    panel.setLoc(25, 60);
+    // 1. Configure and ACTIVATE the parent panel container
+    panel.setName("mainPanel");
+    panel.setLoc(0, 0);
     panel.activate();
 
+    // 2. Configure OK Button
+    btnOk.setName("btnOk");
+    btnOk.setLoc(40, 20);
+    btnOk.link(&panel);
+    btnOk.setText("OK")
+         .setFont(font_roboto_regular_50::Font, 0.25f)
+         .setJustification(TextJustify::CENTER, TextVAlign::MIDDLE)
+         .setColors(0x03E0, 0xFFFF, 0x02C0) // Green background
+         .onClick(onOkClicked);
+    btnOk.activate();
+
+    // 3. Configure Cancel Button
+    btnCancel.setName("btnCancel");
+    btnCancel.setLoc(40, 90);
+    btnCancel.link(&panel);
+    btnCancel.setText("Cancel")
+             .setFont(font_roboto_regular_50::Font, 0.20f)
+             .setJustification(TextJustify::CENTER, TextVAlign::MIDDLE)
+             .setColors(0xF800, 0xFFFF, 0xA000) // Red background
+             .onClick(onCancelClicked);
+    btnCancel.activate();
 
     display.clear();
 
-    Coord loc = btn.getLoc();
-    display.fillRegion(loc.x, loc.y, btn.pixmap.width(), btn.pixmap.height(), btn.pixmap.getPixels(), btn.pixmap.getMask());
-    
-    Coord loc2 = btn2.getLoc();
-    display.fillRegion(loc2.x, loc2.y, btn2.pixmap.width(), btn2.pixmap.height(), btn2.pixmap.getPixels(), btn2.pixmap.getMask());
-    
-    display.swap();
+    // Enable Mutually Exclusive Mode (single clicks wait 300ms to verify no double click happens)
+    touchProcessor.setDeferredClickMode(true);
 
-    Serial.println(panel.currentComponent()->getName());
-    panel.loadNextComponent();
-    Serial.println(panel.currentComponent()->getName());
-    panel.loadNextComponent();
-    Serial.println(panel.currentComponent()->getName());
-    Serial.println();
-
-    btn.setOrder(0);
-    btn2.setOrder(1);
-    panel.updateOrder();
-    panel.loadHeadComponent();
-
-    Serial.println(panel.currentComponent()->getName());
-    panel.loadNextComponent();
-    Serial.println(panel.currentComponent()->getName());
-    panel.loadNextComponent();
-    Serial.println(panel.currentComponent()->getName());
-    Serial.println();
-
-    delay(2000);
+    // Or set it to Immediate Mode (instant response, double clicks fire after single click)
+    // touchProcessor.setDeferredClickMode(false);
 }
 
-void loop()
-{
+void loop() {
+    // Process incoming hardware touch coordinates
     touchProcessor.process(display.touched(),
                            display.touchX(),
                            display.touchY());
+
+    // Update internal button state and redraw pixmaps if dirty
+    btnOk.update();
+    btnCancel.update();
+
+    // Blit pixel memory onto TeensyTFT screen hardware (only draws when dirty)
+    btnOk.drawTo(display);
+    btnCancel.drawTo(display);
+
+    display.swap();
 }
