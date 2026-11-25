@@ -18,7 +18,6 @@ void click(int x, int y)
     e.endY      = y;
     e.direction = 0;
     getEventSignal().fire(e);
-    Serial.println("fire");
 }
 
 void doubleClick(int x, int y)
@@ -101,7 +100,7 @@ void drag(int startX, int startY, int endX, int endY)
     e.startY    = startY;
     e.endX      = endX;
     e.endY      = endY;
-    e.direction = atan2(endY - startY, endX - startX) * 180.0 / M_PI;
+    e.direction = atan2f(float(endY) - startY, float(endX) - startX) * PanelRadiansToDegrees;
     getEventSignal().fire(e);
 }
 

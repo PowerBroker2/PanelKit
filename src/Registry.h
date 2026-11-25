@@ -1,30 +1,52 @@
 #pragma once
 #include <Arduino.h>
 #include "Events.h"
+#include "Render.h"
 
 class BaseComponent;
+struct PanelCanvas;
 
 class ComponentRegistry
 {
 protected:
-    BaseComponent* head        = nullptr;
+    BaseComponent* head = nullptr;
+    BaseComponent* tail = nullptr;
     BaseComponent* currentComp = nullptr;
-    int            currentIdx  = 0;
-    int            size        = 0;
+    BaseComponent* capture = nullptr;
+    BaseComponent* focus = nullptr;
+    BaseComponent* popup = nullptr;
+    BaseComponent* modal = nullptr;
+    int size = 0;
 
 public:
-    ComponentRegistry();
+    ComponentRegistry() = default;
+    virtual ~ComponentRegistry();
+    ComponentRegistry(const ComponentRegistry&) = delete;
+    ComponentRegistry& operator=(const ComponentRegistry&) = delete;
 
     void registerComponent(BaseComponent* child);
     void unregisterComponent(BaseComponent* child);
     void updateOrder();
-    int  numComps();
-    int  currentIndex();
-    BaseComponent* currentComponent();
-    BaseComponent* headComponent();
-    void loadHeadComponent();
+    void raise(BaseComponent* child);
+    virtual void invalidateRegistry() {}
+    virtual void invalidateRegion(PixmapRect) { invalidateRegistry(); }
+    void setPopup(BaseComponent* child);
+    void setModal(BaseComponent* child);
+    void clearModal(BaseComponent* child) { if (modal == child) setModal(nullptr); }
+    virtual PixmapRect visibleArea() const { return {0, 0, INT_MAX, INT_MAX}; }
+    virtual BaseComponent* ownerComponent() { return nullptr; }
+    void cancelInput();
+    void dispatch(Event event);
+    void renderChildren(const PanelCanvas& canvas, int x, int y);
+    BaseComponent* hit(int x, int y) const;
+
+    int numComps() const { return size; }
+    int currentIndex();
+    BaseComponent* currentComponent() const { return currentComp; }
+    BaseComponent* headComponent() const { return head; }
+    void loadHeadComponent() { currentComp = head; }
     void loadNextComponent();
     void loadPrevComponent();
     void loadComponentByIdx(int idx);
-    void loadComponentByName(char* name);
+    void loadComponentByName(const char* name);
 };

@@ -1,247 +1,233 @@
 #include "Registry.h"
 #include "Component.h"
-#include "Events.h"
 
-ComponentRegistry::ComponentRegistry() : head(nullptr) {}
-
-void ComponentRegistry::registerComponent(BaseComponent* child) 
+ComponentRegistry::~ComponentRegistry()
 {
-    if (!child) return;
+    while (head)
+        unregisterComponent(head);
+}
 
-    int tempIdx = 0;
-
-    if (head == nullptr) 
+void ComponentRegistry::registerComponent(BaseComponent* child)
+{
+    if (!child || child->registry)
+        return;
+    for (auto* owner = ownerComponent(); owner;
+         owner = owner->registry ? owner->registry->ownerComponent() : nullptr)
+        if (owner == child)
+            return;
+    BaseComponent* previous = nullptr;
+    auto* next = head;
+    while (next && next->getOrder() <= child->getOrder())
     {
-        child->nextSibling = nullptr;
-        child->prevSibling = nullptr;
-
-        head = child;
+        previous = next;
+        next = next->nextSibling;
     }
-    else if (child->getOrder() <= head->getOrder())
-    {
-        child->nextSibling = head;
-        child->prevSibling = nullptr;
-
-        head->prevSibling = child;
-
-        head = child;
-    }
-    else
-    {
-        tempIdx++; // Add one for head right off the bat
-
-        BaseComponent* current = head;
-
-        while (true)
-        {
-            if (current->nextSibling == nullptr)
-                break;
-
-            if (child->getOrder() < current->nextSibling->getOrder())
-                break;
-            
-            current = current->nextSibling;
-            tempIdx++;
-        }
-
-        BaseComponent* prev = current;
-        BaseComponent* next = current->nextSibling;
-
-        child->nextSibling   = next;
-        child->prevSibling   = prev;
-
-        prev->nextSibling = child;
-
-        if (next != nullptr)
-            next->prevSibling = child;
-    }
-
-    currentIdx  = tempIdx;
+    child->registry = this;
+    child->registered = true;
+    child->prevSibling = previous;
+    child->nextSibling = next;
+    if (previous) previous->nextSibling = child;
+    else head = child;
+    if (next) next->prevSibling = child;
+    else tail = child;
     currentComp = child;
-    size++;
+    ++size;
+    child->registryChanged();
+    invalidateRegistry();
+}
+
+void ComponentRegistry::cancelInput()
+{
+    auto* target = capture;
+    capture = focus = nullptr;
+    if (target) target->cancelInteraction();
 }
 
 void ComponentRegistry::unregisterComponent(BaseComponent* child)
 {
-    if (!child)
+    if (!child || child->registry != this)
         return;
-
-    if (child->prevSibling != nullptr)
-    {
-        child->prevSibling->nextSibling = child->nextSibling;
-    }
-    else
-    {
-        head = child->nextSibling;
-    }
-
-    if (child->nextSibling != nullptr)
-    {
-        child->nextSibling->prevSibling = child->prevSibling;
-    }
-
-    if (currentComp == child)
-    {
-        if (child->nextSibling != nullptr)
-        {
-            currentComp = child->nextSibling;
-            // index stays numerically identical because the list collapsed forward
-        }
-        else if (child->prevSibling != nullptr)
-        {
-            currentComp = child->prevSibling;
-            currentIdx--;
-        }
-        else
-        {
-            currentComp = nullptr;
-            currentIdx = 0;
-        }
-    }
-    else
-    {
-        // Optional: If the removed component sat physically *before* our active component,
-        // we must manually shift our tracked integer index back by 1 to maintain sync.
-        // To do this strictly, you can traverse from head to find the actual index,
-        // or just leave index management to an absolute recalculation function.
-    }
-
-    child->nextSibling = nullptr;
-    child->prevSibling = nullptr;
-
-    if (size > 0)
-        size--;
+    const auto next = child->nextSibling;
+    const auto previous = child->prevSibling;
+    if (previous) previous->nextSibling = next;
+    else head = next;
+    if (next) next->prevSibling = previous;
+    else tail = previous;
+    if (currentComp == child) currentComp = next ? next : previous;
+    if (capture == child) capture = nullptr;
+    if (focus == child) focus = nullptr;
+    if (popup == child) popup = nullptr;
+    if (modal == child) modal = nullptr;
+    child->registry = nullptr;
+    child->registered = false;
+    child->nextSibling = child->prevSibling = nullptr;
+    --size;
+    child->cancelInteraction();
+    child->registryChanged();
+    invalidateRegistry();
 }
 
 void ComponentRegistry::updateOrder()
 {
-    if (head == nullptr || head->nextSibling == nullptr)
-        return;
-
-    BaseComponent* current = head;
-    
-    head        = nullptr;
-    currentComp = nullptr;
-    currentIdx  = 0;
-    size        = 0;
-
-    while (current != nullptr)
+    // Stable insertion sort of the intrusive list. Ownership and capture stay intact.
+    BaseComponent* sorted = nullptr;
+    for (auto* node = head; node;)
     {
-        BaseComponent* nextItem = current->nextSibling;
-
-        this->registerComponent(current);
-
-        current = nextItem;
+        auto* next = node->nextSibling;
+        auto** position = &sorted;
+        BaseComponent* previous = nullptr;
+        while (*position && (*position)->getOrder() <= node->getOrder())
+        {
+            previous = *position;
+            position = &previous->nextSibling;
+        }
+        node->prevSibling = previous;
+        node->nextSibling = *position;
+        if (*position) (*position)->prevSibling = node;
+        *position = node;
+        node = next;
     }
+    head = sorted;
+    tail = head;
+    while (tail && tail->nextSibling)
+        tail = tail->nextSibling;
+    invalidateRegistry();
 }
 
-int ComponentRegistry::numComps()
+void ComponentRegistry::raise(BaseComponent* child)
 {
-    return size;
+    if (!child || child->registry != this || child == tail) return;
+    auto* previous = child->prevSibling;
+    auto* next = child->nextSibling;
+    if (previous) previous->nextSibling = next;
+    else head = next;
+    next->prevSibling = previous;
+    child->order = tail->order;
+    child->prevSibling = tail;
+    child->nextSibling = nullptr;
+    tail->nextSibling = child;
+    tail = child;
+    invalidateRegion(child->visualBounds());
+}
+
+BaseComponent* ComponentRegistry::hit(int x, int y) const
+{
+    if (popup && popup->isInteractive() && popup->hitTest(x, y))
+        return popup;
+    if (modal && modal->isInteractive())
+        return modal->hitTest(x, y) ? modal : nullptr;
+    for (auto* child = tail; child; child = child->prevSibling)
+        if (child->isInteractive() && child->hitTest(x, y))
+            return child;
+    return nullptr;
+}
+
+void ComponentRegistry::setPopup(BaseComponent* child)
+{
+    if (child && child->registry != this) return;
+    if (child == popup) return;
+    auto* prior = popup;
+    popup = nullptr;
+    if (prior && child) prior->dismissPopup();
+    popup = child;
+}
+
+void ComponentRegistry::setModal(BaseComponent* child)
+{
+    if ((child && child->registry != this) || child == modal) return;
+    if (popup)
+    {
+        auto* prior = popup;
+        popup = nullptr;
+        prior->dismissPopup();
+    }
+    cancelInput();
+    modal = child;
+    invalidateRegistry();
+}
+
+void ComponentRegistry::dispatch(Event e)
+{
+    BaseComponent* target = nullptr;
+    switch (e.type)
+    {
+        case EventType::PRESS:
+            if (popup && !popup->hitTest(e.startX, e.startY))
+            {
+                auto* prior = popup;
+                popup = nullptr;
+                prior->dismissPopup();
+            }
+            cancelInput();
+            capture = focus = hit(e.startX, e.startY);
+            target = capture;
+            break;
+        case EventType::DRAG:
+        case EventType::RELEASE:
+            target = capture;
+            if (e.type == EventType::RELEASE) capture = nullptr;
+            break;
+        case EventType::TYPE:
+            target = focus;
+            break;
+        default:
+            target = hit(e.startX, e.startY);
+            break;
+    }
+    if (target && target->isInteractive())
+        target->handleEvent(e);
+}
+
+void ComponentRegistry::renderChildren(const PanelCanvas& canvas, int x, int y)
+{
+    for (auto* child = head; child; child = child->nextSibling)
+        if (child != popup && child != modal && child->isVisible())
+        {
+            const auto region = panelIntersection(canvas.clip, panelTranslate(child->visualBounds(), x, y));
+            if (region.width && region.height)
+                child->render(canvas, x, y);
+        }
+    if (modal && modal != popup && modal->isVisible())
+        modal->render(canvas, x, y);
+    if (popup && popup->isVisible())
+        popup->render(canvas, x, y);
 }
 
 int ComponentRegistry::currentIndex()
 {
-    return currentIdx;
+    int index = 0;
+    for (auto* item = head; item && item != currentComp; item = item->nextSibling)
+        ++index;
+    return currentComp ? index : 0;
 }
 
-BaseComponent* ComponentRegistry::currentComponent()
+void ComponentRegistry::loadComponentByIdx(int index)
 {
-    return currentComp;
+    if (index < 0 || index >= size)
+        return;
+    auto* item = head;
+    while (index-- > 0)
+        item = item->nextSibling;
+    currentComp = item;
 }
 
-
-BaseComponent* ComponentRegistry::headComponent()
+void ComponentRegistry::loadComponentByName(const char* name)
 {
-    return head;
-}
-
-void ComponentRegistry::loadHeadComponent()
-{
-    currentComp = head;
-    currentIdx  = 0;
+    if (!name) return;
+    for (auto* item = head; item; item = item->nextSibling)
+        if (strcmp(item->getName(), name) == 0)
+        {
+            currentComp = item;
+            return;
+        }
 }
 
 void ComponentRegistry::loadNextComponent()
 {
-    if (currentComp->nextSibling != nullptr)
-    {
-        currentComp = currentComp->nextSibling;
-        currentIdx++;
-    }
-    else
-    {
-        currentComp = head;
-        currentIdx  = 0;
-    }
+    currentComp = currentComp && currentComp->nextSibling ? currentComp->nextSibling : head;
 }
 
 void ComponentRegistry::loadPrevComponent()
 {
-    if (currentComp->prevSibling != nullptr)
-    {
-        currentComp = currentComp->prevSibling;
-        currentIdx--;
-    }
-    else
-    {
-        BaseComponent* tail = head;
-        int tailIdx = 0;
-        
-        while (tail->nextSibling != nullptr)
-        {
-            tail = tail->nextSibling;
-            tailIdx++;
-        }
-        
-        currentComp = tail;
-        currentIdx  = tailIdx;
-    }
-}
-
-void ComponentRegistry::loadComponentByIdx(int idx)
-{
-    if (head == nullptr || idx < 0 || idx >= size)
-        return;
-
-    BaseComponent* current = head;
-    int currentCount = 0;
-
-    while (current != nullptr)
-    {
-        if (currentCount == idx)
-        {
-            currentComp = current;
-            currentIdx  = currentCount;
-            return;
-        }
-        current = current->nextSibling;
-        currentCount++;
-    }
-}
-
-void ComponentRegistry::loadComponentByName(char* name)
-{
-    if (head == nullptr || name == nullptr) return;
-
-    BaseComponent* current = head;
-    int currentCount = 0;
-
-    while (current != nullptr)
-    {
-        const char* compName = current->getName();
-
-        if (compName != nullptr)
-        {
-            if (strcmp(compName, name) == 0)
-            {
-                currentComp = current;
-                currentIdx  = currentCount;
-                return;
-            }
-        }
-        
-        current = current->nextSibling;
-        currentCount++;
-    }
+    currentComp = currentComp && currentComp->prevSibling ? currentComp->prevSibling : tail;
 }

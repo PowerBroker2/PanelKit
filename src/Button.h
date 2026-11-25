@@ -8,7 +8,7 @@
 enum class TextJustify { LEFT, CENTER, RIGHT };
 enum class TextVAlign  { TOP, MIDDLE, BOTTOM };
 
-template <uint16_t WIDTH, uint16_t HEIGHT>
+template <uint16_t WIDTH, uint16_t HEIGHT, bool BUFFERED_TEXT = true>
 class PanelButton : public BaseComponent
 {
 private:
@@ -26,22 +26,30 @@ private:
     uint16_t cornerRadius   = 0;      // Corner radius for rounded rects
 
     bool isPressed = false;
+    bool trackingPress = false;
+    bool subscribed = false;
     bool dirty     = true;
     bool needsBlit = true;            // Flags when hardware update is required
 
     void (*clickCallback)() = nullptr;
+    void (*doubleClickCallback)() = nullptr;
 
     // Slot required by tomstewart89/Callback library
-    MethodSlot<PanelButton<WIDTH, HEIGHT>, Event> eventSlot;
+    MethodSlot<PanelButton, Event> eventSlot;
+
+    void receiveGlobal(Event e)
+    {
+        if (!this->registry) onEvent(e);
+    }
 
     int calculateTextX(int textWidth) const
     {
         switch (hJustify)
         {
             case TextJustify::LEFT:   return padding;
-            case TextJustify::RIGHT:  return WIDTH - textWidth - padding;
-            case TextJustify::CENTER: 
-            default:                  return (WIDTH - textWidth) / 2;
+            case TextJustify::RIGHT:  return int(WIDTH) - textWidth - padding;
+            case TextJustify::CENTER:
+            default:                  return (int(WIDTH) - textWidth) / 2;
         }
     }
 
@@ -50,38 +58,54 @@ private:
         switch (vJustify)
         {
             case TextVAlign::TOP:    return padding;
-            case TextVAlign::BOTTOM: return HEIGHT - textHeight - padding;
-            case TextVAlign::MIDDLE: 
-            default:                 return (HEIGHT - textHeight) / 2;
+            case TextVAlign::BOTTOM: return int(HEIGHT) - textHeight - padding;
+            case TextVAlign::MIDDLE:
+            default:                 return (int(HEIGHT) - textHeight) / 2;
         }
     }
 
 public:
-    // Off-screen pixel buffer managed by PixelPlanner
+    // Off-screen pixel buffers managed by PixelPlanner
     Pixmap<WIDTH, HEIGHT> pixmap;
+    Pixmap<BUFFERED_TEXT ? WIDTH : 1, BUFFERED_TEXT ? HEIGHT : 1> textPixmap;
 
-    PanelButton()
-        : eventSlot(this, &PanelButton::onEvent)
+    explicit PanelButton(ComponentRegistry* parent = nullptr)
+        : BaseComponent(parent), eventSlot(this, &PanelButton::receiveGlobal)
     {
         // Set dimensions on the base class struct so Panel's inBounds() works
         this->dim.dx = WIDTH;
         this->dim.dy = HEIGHT;
 
-        getEventSignal().attach(eventSlot);
+        registryChanged();
     }
 
     ~PanelButton()
     {
-        getEventSignal().detach(eventSlot);
+        if (subscribed) getEventSignal().detach(eventSlot);
+    }
+
+    void registryChanged() override
+    {
+        if (!this->registry && !subscribed)
+        {
+            getEventSignal().attach(eventSlot);
+            subscribed = true;
+        }
+        else if (this->registry && subscribed)
+        {
+            getEventSignal().detach(eventSlot);
+            subscribed = false;
+        }
     }
 
     // --- Fluent Setters ---
 
     PanelButton& setText(const char* txt)
     {
-        strncpy(this->label, txt, sizeof(this->label) - 1);
+        strncpy(this->label, txt ? txt : "", sizeof(this->label) - 1);
         this->label[sizeof(this->label) - 1] = '\0';
         dirty = true;
+        this->invalidate();
         return *this;
     }
 
@@ -90,6 +114,7 @@ public:
         this->font = &f;
         this->fontScale = scale;
         dirty = true;
+        this->invalidate();
         return *this;
     }
 
@@ -98,6 +123,7 @@ public:
         this->hJustify = h;
         this->vJustify = v;
         dirty = true;
+        this->invalidate();
         return *this;
     }
 
@@ -108,6 +134,7 @@ public:
         this->pressedBgColor = (pressedBg != 0) ? pressedBg : bg;
         this->borderColor = (border != 0) ? border : bg;
         dirty = true;
+        this->invalidate();
         return *this;
     }
 
@@ -115,6 +142,7 @@ public:
     {
         this->cornerRadius = radius;
         dirty = true;
+        this->invalidate();
         return *this;
     }
 
@@ -124,120 +152,108 @@ public:
         return *this;
     }
 
-    // --- Drawing Routine ---
+    PanelButton& onDoubleClick(void (*callback)())
+    {
+        doubleClickCallback = callback;
+        return *this;
+    }
 
     void redraw()
     {
-        uint16_t currentBg = isPressed ? pressedBgColor : bgColor;
-
-        // 1. Fill background (x, y, w, h, radius, fill, color, alpha)
-        pixmap.draw_rect(0, 0, WIDTH, HEIGHT, cornerRadius, true, currentBg, 1.0f);
-
-        // 2. Border outline
-        if (borderColor != currentBg)
+        const uint16_t bg = isPressed ? pressedBgColor : bgColor;
+        const int radius = min(int(cornerRadius), min(int(WIDTH), int(HEIGHT)) / 2);
+        pixmap.clear();
+        for (int y = 0; y < int(HEIGHT); ++y)
         {
-            pixmap.draw_rect(0, 0, WIDTH, HEIGHT, cornerRadius, false, borderColor, 1.0f);
+            const int distance = min(y, int(HEIGHT) - 1 - y);
+            const int dy = max(0, radius - distance);
+            const int inset = radius - int(sqrtf(float(int64_t(radius) * radius - int64_t(dy) * dy)));
+            if (int(WIDTH) <= 2 * inset)
+                continue;
+            const bool edge = y == 0 || y == int(HEIGHT) - 1;
+            pixmap.draw_rect(inset, y, int(WIDTH) - 2 * inset, 1, 0, true, borderColor);
+            if (!edge && int(WIDTH) > 2 * inset + 2)
+                pixmap.draw_rect(inset + 1, y, int(WIDTH) - 2 * inset - 2, 1, 0, true, bg);
         }
 
-        // 3. Print text
-        if (label[0] != '\0' && font != nullptr)
+        textPixmap.clear();
+        if (label[0] && font && font->getHeight() > 0 && isfinite(fontScale) && fontScale > 0)
         {
-            int textWidth  = strlen(label) * 12 * fontScale; 
-            int textHeight = 16 * fontScale;
-
-            int tx = calculateTextX(textWidth);
-            int ty = calculateTextY(textHeight);
-
-            if (isPressed)
+            const int contentHeight = max(1, int(HEIGHT) - padding * 2);
+            const int height = int(max(1.0f, min(float(contentHeight), roundf(font->getHeight() * fontScale))));
+            int64_t textWidth = 0;
+            for (const char* c = label; *c; ++c)
             {
-                tx += 1;
-                ty += 1;
+                const auto glyph = font->lookupChar(*c);
+                if (glyph.data && glyph.width > 0)
+                    textWidth += max(int64_t(1),
+                        (int64_t(glyph.width) * height + font->getHeight() / 2) / font->getHeight());
+                else if (*c == ' ')
+                    textWidth += height / 3;
             }
-
-            pixmap.print(tx, ty, label, *font, textColor, 20, fontScale);
+            const int width = int(min(int64_t(INT_MAX / 2), textWidth));
+            if (BUFFERED_TEXT)
+            {
+                drawCaption(textPixmap, width, height);
+                pixmap.blit_from_pixmap(textPixmap);
+            }
+            else drawCaption(pixmap, width, height);
         }
-
         dirty = false;
-        needsBlit = true; // Signal drawTo() to update display
+        needsBlit = true;
     }
 
-    // --- Hardware Blitting Helper for TeensyTFT ---
+    void render(const PanelCanvas& canvas, int x, int y) override
+    {
+        update();
+        const auto loc = this->getLoc();
+        canvas.blit({x + loc.x, y + loc.y, int(WIDTH), int(HEIGHT)},
+                    pixmap.getPixels(), pixmap.getMask());
+    }
 
     template <typename TFT>
     void drawTo(TFT& display, bool force = false)
     {
-        if (!needsBlit && !force) return;
-
-        uint16_t bx = this->getLoc().x;
-        uint16_t by = this->getLoc().y;
-
-        // Render pixmap pixels directly to TeensyTFT hardware
-        for (uint16_t py = 0; py < HEIGHT; py++)
-        {
-            for (uint16_t px = 0; px < WIDTH; px++)
-            {
-                display.drawPixel(bx + px, by + py, pixmap.getPixelValue(px, py));
-            }
-        }
-
-        needsBlit = false;
+        update();
+        if (!needsBlit && !this->renderDirty && !force) return;
+        if (this->isVisible()) render(PanelCanvas::from(display), 0, 0);
+        needsBlit = this->renderDirty = false;
     }
 
-    // --- Touch Event Slot ---
+    void handleEvent(Event e) override { onEvent(e); }
+    void deactivate() override { cancelInteraction(); BaseComponent::deactivate(); }
+    void cancelInteraction() override
+    {
+        trackingPress = false;
+        setPressed(false);
+    }
 
     void onEvent(Event e)
     {
-        if (!this->isActive()) return;
-
-        bool startIn   = this->inBounds(e.startX, e.startY);
-        bool currentIn = this->inBounds(e.endX, e.endY);
-
+        if (!this->isInteractive()) return;
         switch (e.type)
         {
             case EventType::PRESS:
-                if (startIn || currentIn)
-                {
-                    isPressed = true;
-                    dirty = true;
-                }
+                trackingPress = this->inBounds(e.startX, e.startY);
+                setPressed(trackingPress);
                 break;
-
             case EventType::DRAG:
-                if (isPressed && !currentIn)
-                {
-                    // Finger dragged outside button bounds -> revert state
-                    isPressed = false;
-                    dirty = true;
-                }
-                else if (!isPressed && startIn && currentIn)
-                {
-                    // Finger dragged back inside button bounds -> re-highlight
-                    isPressed = true;
-                    dirty = true;
-                }
+                setPressed(trackingPress && this->inBounds(e.endX, e.endY));
                 break;
-
             case EventType::RELEASE:
-                if (isPressed)
-                {
-                    isPressed = false;
-                    dirty = true;
-                }
+                cancelInteraction();
                 break;
-
             case EventType::CLICK:
-                if (isPressed)
-                {
-                    isPressed = false;
-                    dirty = true;
-                }
-                // Trigger callback only if touch both started AND ended inside button
-                if (startIn && currentIn && clickCallback)
-                {
+                if (this->inBounds(e.startX, e.startY) && this->inBounds(e.endX, e.endY) && clickCallback)
                     clickCallback();
+                break;
+            case EventType::DOUBLE_CLICK:
+                if (this->inBounds(e.startX, e.startY) && this->inBounds(e.endX, e.endY))
+                {
+                    const auto callback = doubleClickCallback ? doubleClickCallback : clickCallback;
+                    if (callback) callback();
                 }
                 break;
-
             default:
                 break;
         }
@@ -245,9 +261,27 @@ public:
 
     void update()
     {
-        if (dirty)
+        if (dirty) redraw();
+    }
+
+private:
+    template <size_t W, size_t H>
+    void drawCaption(Pixmap<W, H>& target, int width, int height)
+    {
+        target.setClipRect({padding, padding, max(0, int(WIDTH) - padding * 2),
+                            max(0, int(HEIGHT) - padding * 2)});
+        target.print(calculateTextX(width) + isPressed, calculateTextY(height) + isPressed,
+                      label, *font, textColor, height);
+        target.resetClipRect();
+    }
+
+    void setPressed(bool value)
+    {
+        if (isPressed != value)
         {
-            redraw();
+            isPressed = value;
+            dirty = true;
+            this->invalidate();
         }
     }
 };
