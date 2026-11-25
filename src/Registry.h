@@ -16,6 +16,7 @@ protected:
     BaseComponent* focus = nullptr;
     BaseComponent* popup = nullptr;
     BaseComponent* modal = nullptr;
+    BaseComponent* modalReturnFocus = nullptr;
     int size = 0;
 
 public:
@@ -31,10 +32,16 @@ public:
     virtual void invalidateRegistry() {}
     virtual void invalidateRegion(PixmapRect) { invalidateRegistry(); }
     void setPopup(BaseComponent* child);
+    void dismissPopups();
     void setModal(BaseComponent* child);
+    BaseComponent* activeModal() const;
+    bool setInputFocus(BaseComponent* child);
     void clearModal(BaseComponent* child) { if (modal == child) setModal(nullptr); }
     virtual PixmapRect visibleArea() const { return {0, 0, INT_MAX, INT_MAX}; }
     virtual BaseComponent* ownerComponent() { return nullptr; }
+    virtual void childVisibilityChanged() {}
+    bool contains(const BaseComponent* child) const;
+    void notifyViewportChanged();
     void cancelInput();
     void dispatch(Event event);
     void renderChildren(const PanelCanvas& canvas, int x, int y);

@@ -34,6 +34,20 @@ void ComponentRegistry::registerComponent(BaseComponent* child)
     ++size;
     child->registryChanged();
     invalidateRegistry();
+    if (child->isActive()) childVisibilityChanged();
+}
+
+bool ComponentRegistry::contains(const BaseComponent* child) const
+{
+    for (auto* item = head; item; item = item->nextSibling)
+        if (item == child) return true;
+    return false;
+}
+
+void ComponentRegistry::notifyViewportChanged()
+{
+    for (auto* child = head; child; child = child->nextSibling)
+        child->parentViewportChanged();
 }
 
 void ComponentRegistry::cancelInput()
@@ -57,7 +71,8 @@ void ComponentRegistry::unregisterComponent(BaseComponent* child)
     if (capture == child) capture = nullptr;
     if (focus == child) focus = nullptr;
     if (popup == child) popup = nullptr;
-    if (modal == child) modal = nullptr;
+    if (modalReturnFocus == child) modalReturnFocus = nullptr;
+    if (modal == child) setModal(nullptr);
     child->registry = nullptr;
     child->registered = false;
     child->nextSibling = child->prevSibling = nullptr;
@@ -65,6 +80,7 @@ void ComponentRegistry::unregisterComponent(BaseComponent* child)
     child->cancelInteraction();
     child->registryChanged();
     invalidateRegistry();
+    childVisibilityChanged();
 }
 
 void ComponentRegistry::updateOrder()
@@ -112,12 +128,12 @@ void ComponentRegistry::raise(BaseComponent* child)
 
 BaseComponent* ComponentRegistry::hit(int x, int y) const
 {
-    if (popup && popup->isInteractive() && popup->hitTest(x, y))
+    if (auto* child = activeModal())
+        return child->hitTest(x, y) ? child : nullptr;
+    if (popup && !popup->overlay && popup->isInteractive() && popup->hitTest(x, y))
         return popup;
-    if (modal && modal->isInteractive())
-        return modal->hitTest(x, y) ? modal : nullptr;
     for (auto* child = tail; child; child = child->prevSibling)
-        if (child->isInteractive() && child->hitTest(x, y))
+        if (!child->overlay && child->isInteractive() && child->hitTest(x, y))
             return child;
     return nullptr;
 }
@@ -132,17 +148,35 @@ void ComponentRegistry::setPopup(BaseComponent* child)
     popup = child;
 }
 
+void ComponentRegistry::dismissPopups()
+{
+    popup = nullptr;
+    for (auto* child = head; child; child = child->nextSibling) child->dismissPopup();
+}
+
+BaseComponent* ComponentRegistry::activeModal() const
+{
+    return modal && !modal->overlay && modal->isInteractive() ? modal : nullptr;
+}
+
+bool ComponentRegistry::setInputFocus(BaseComponent* child)
+{
+    auto* active = activeModal();
+    if (child && (child->registry != this || child->overlay || !child->isInteractive() ||
+                  (active && active != child))) return false;
+    focus = child;
+    return true;
+}
+
 void ComponentRegistry::setModal(BaseComponent* child)
 {
-    if ((child && child->registry != this) || child == modal) return;
-    if (popup)
-    {
-        auto* prior = popup;
-        popup = nullptr;
-        prior->dismissPopup();
-    }
+    if ((child && (child->registry != this || child->overlay)) || child == modal) return;
+    dismissPopups();
+    if (child && !activeModal()) modalReturnFocus = focus;
     cancelInput();
     modal = child;
+    setInputFocus(child ? child : modalReturnFocus);
+    if (!child) modalReturnFocus = nullptr;
     invalidateRegistry();
 }
 
@@ -152,6 +186,8 @@ void ComponentRegistry::dispatch(Event e)
     switch (e.type)
     {
         case EventType::PRESS:
+            if (auto* active = activeModal())
+                if (!active->hitTest(e.startX, e.startY)) break;
             if (popup && !popup->hitTest(e.startX, e.startY))
             {
                 auto* prior = popup;
@@ -164,33 +200,42 @@ void ComponentRegistry::dispatch(Event e)
             break;
         case EventType::DRAG:
         case EventType::RELEASE:
+        case EventType::CANCEL:
             target = capture;
-            if (e.type == EventType::RELEASE) capture = nullptr;
+            if (e.type != EventType::DRAG) capture = nullptr;
+            if (e.type == EventType::CANCEL && target == focus) focus = nullptr;
             break;
         case EventType::TYPE:
-            target = focus;
+            target = activeModal();
+            if (!target) target = focus;
             break;
         default:
             target = hit(e.startX, e.startY);
             break;
     }
-    if (target && target->isInteractive())
-        target->handleEvent(e);
+    if (target && !target->overlay && target->isInteractive())
+        target->dispatchInput(e);
 }
 
 void ComponentRegistry::renderChildren(const PanelCanvas& canvas, int x, int y)
 {
     for (auto* child = head; child; child = child->nextSibling)
-        if (child != popup && child != modal && child->isVisible())
+        if (!child->overlay && child != popup && child != modal && child->isVisible())
         {
             const auto region = panelIntersection(canvas.clip, panelTranslate(child->visualBounds(), x, y));
             if (region.width && region.height)
                 child->render(canvas, x, y);
         }
-    if (modal && modal != popup && modal->isVisible())
-        modal->render(canvas, x, y);
-    if (popup && popup->isVisible())
+    if (popup && !popup->overlay && popup != modal && popup->isVisible())
         popup->render(canvas, x, y);
+    if (modal && !modal->overlay && modal->isVisible())
+        modal->render(canvas, x, y);
+    for (auto* child = head; child; child = child->nextSibling)
+        if (child->overlay && child->isVisible())
+        {
+            const auto region = panelIntersection(canvas.clip, panelTranslate(child->visualBounds(), x, y));
+            if (region.width && region.height) child->render(canvas, x, y);
+        }
 }
 
 int ComponentRegistry::currentIndex()

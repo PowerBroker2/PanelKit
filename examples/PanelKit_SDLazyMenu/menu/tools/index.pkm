@@ -1,0 +1,6 @@
+PKM1
+TITLE	Tools
+TEXT	This panel replaced the home page.
+LINK	Advanced view	advanced/view.pkm
+LINK	Return to root	../index.pkm
+ACTION	Run diagnostics	probe

@@ -3,7 +3,10 @@
 #include "font_inter_regular_16.h"
 
 TeensyTFT display(10, 9, 255);
-TouchProcessor touch;
+PanelInput input;
+PanelTouchInput touch(input);
+// Switch to COMMANDS to drive the Workbench from newline-delimited Serial Monitor commands.
+PanelStreamInput serialInput(input, PanelStreamMode::TEXT);
 Panel<320, 240, false> desktop;
 PanelTabs tabs(304, 24, &desktop);
 Panel<320, 208, false> controlsPage(&desktop);
@@ -96,6 +99,7 @@ void setup()
     Serial.begin(115200);
     ready = display.begin();
     if (!ready) return;
+    input.setBounds(display.width(), display.height());
 
     PanelTheme theme;
     theme.font = &font_inter_regular_16::Font;
@@ -249,10 +253,9 @@ void setup()
 void loop()
 {
     if (!ready) return;
-    const bool pressed = display.touched();
-    touch.process(pressed, display.touchX(), display.touchY());
-    const int character = Serial.read();
-    if (character >= 0) type(char(character));
+    touch.pollDisplay(display);
+    serialInput.poll(Serial);
+    input.tick();
     const uint32_t now = millis();
     if (tabs.selectedIndex() == 1 && liveEnabled.isChecked() && now - lastSample >= 55)
     {

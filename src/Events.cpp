@@ -8,7 +8,7 @@ Signal<Event>& getEventSignal()
 
 void click(int x, int y)
 {
-    Event e;
+    Event e{};
     e.timestamp = micros();
     e.type      = EventType::CLICK;
     e.character = '\0';
@@ -22,7 +22,7 @@ void click(int x, int y)
 
 void doubleClick(int x, int y)
 {
-    Event e;
+    Event e{};
     e.timestamp = micros();
     e.type      = EventType::DOUBLE_CLICK;
     e.character = '\0';
@@ -36,7 +36,7 @@ void doubleClick(int x, int y)
 
 void scroll(int x, int y, float direction)
 {
-    Event e;
+    Event e{};
     e.timestamp = micros();
     e.type      = EventType::SCROLL;
     e.character = '\0';
@@ -50,7 +50,7 @@ void scroll(int x, int y, float direction)
 
 void type(char c, int x, int y)
 {
-    Event e;
+    Event e{};
     e.timestamp = micros();
     e.type      = EventType::TYPE;
     e.character = c;
@@ -64,7 +64,7 @@ void type(char c, int x, int y)
 
 void press(int x, int y)
 {
-    Event e;
+    Event e{};
     e.timestamp = micros();
     e.type      = EventType::PRESS;
     e.character = '\0';
@@ -78,7 +78,7 @@ void press(int x, int y)
 
 void release(int x, int y)
 {
-    Event e;
+    Event e{};
     e.timestamp = micros();
     e.type      = EventType::RELEASE;
     e.character = '\0';
@@ -92,7 +92,7 @@ void release(int x, int y)
 
 void drag(int startX, int startY, int endX, int endY)
 {
-    Event e;
+    Event e{};
     e.timestamp = micros();
     e.type      = EventType::DRAG;
     e.character = '\0';
@@ -115,6 +115,8 @@ const char* eventTypeToString(EventType type)
         case EventType::PRESS:        return "PRESS";
         case EventType::RELEASE:      return "RELEASE";
         case EventType::DRAG:         return "DRAG";
+        case EventType::MOVE:         return "MOVE";
+        case EventType::CANCEL:       return "CANCEL";
         default:                      return "UNKNOWN";
     }
 }

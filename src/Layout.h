@@ -17,6 +17,13 @@ class PanelFlex : public Panel<WIDTH, HEIGHT, false>
     PanelAxis axis = PanelAxis::VERTICAL;
     int padding = 0, gap = 0;
 
+protected:
+    void reflowChildren() override
+    {
+        if (items) relayout();
+        else Panel<WIDTH, HEIGHT, false>::reflowChildren();
+    }
+
 public:
     using Panel<WIDTH, HEIGHT, false>::Panel;
     void setLayout(const PanelFlexItem* entries, size_t length,
@@ -27,14 +34,15 @@ public:
         axis = direction;
         gap = max(0, spacing);
         padding = max(0, inset);
-        relayout();
+        reflowChildren();
     }
-    void setSize(int w, int h) override
+    void setHorizontalLayout(const PanelFlexItem* entries, size_t length, int spacing = 0, int inset = 0)
     {
-        const auto old = this->getSize();
-        Panel<WIDTH, HEIGHT, false>::setSize(w, h);
-        const auto size = this->getSize();
-        if (size.dx != old.dx || size.dy != old.dy) relayout();
+        setLayout(entries, length, PanelAxis::HORIZONTAL, spacing, inset);
+    }
+    void setVerticalLayout(const PanelFlexItem* entries, size_t length, int spacing = 0, int inset = 0)
+    {
+        setLayout(entries, length, PanelAxis::VERTICAL, spacing, inset);
     }
     void relayout()
     {
@@ -47,7 +55,7 @@ public:
         bool haveItem = false;
         for (size_t i = 0; i < count; ++i)
         {
-            if (!items[i].widget || !items[i].widget->isVisible()) continue;
+            if (!this->contains(items[i].widget) || !items[i].widget->isVisible()) continue;
             used += max(0, items[i].basis) + (haveItem ? int64_t(gap) : 0);
             weights += items[i].weight;
             haveItem = true;
@@ -59,36 +67,15 @@ public:
         for (size_t i = 0; i < count; ++i)
         {
             auto* widget = items[i].widget;
-            if (!widget || !widget->isVisible()) continue;
+            if (!this->contains(widget) || !widget->isVisible()) continue;
             const auto before = progress;
             progress += items[i].weight;
             const int share = weights ? int(uint64_t(extra) * progress / weights -
                                             uint64_t(extra) * before / weights) : 0;
             const int length = panelCoordinate(int64_t(max(0, items[i].basis)) + share);
-            widget->setLoc(vertical ? padding : cursor, vertical ? cursor : padding);
-            widget->setSize(vertical ? crossSize : length, vertical ? length : crossSize);
+            widget->setLayoutGeometry({vertical ? padding : cursor, vertical ? cursor : padding,
+                                       vertical ? crossSize : length, vertical ? length : crossSize});
             cursor = panelCoordinate(int64_t(cursor) + length + gap);
         }
     }
 };
-
-inline void panelGrid(BaseComponent* const* items, size_t count, unsigned columns,
-                      PixmapRect area, int horizontalGap = 0, int verticalGap = 0)
-{
-    if (!items || !count || !columns || area.width < 0 || area.height < 0) return;
-    const int64_t rows = int64_t((count - 1) / columns + 1);
-    const int xGap = columns > 1 ? max(0, min(horizontalGap, int(int64_t(area.width) / (columns - 1)))) : 0;
-    const int yGap = rows > 1 ? max(0, min(verticalGap, int(area.height / (rows - 1)))) : 0;
-    const int64_t width = max(int64_t(0), int64_t(area.width) - int64_t(xGap) * (columns - 1));
-    const int64_t height = max(int64_t(0), int64_t(area.height) - int64_t(yGap) * (rows - 1));
-    for (size_t i = 0; i < count; ++i)
-    {
-        if (!items[i]) continue;
-        const int64_t col = i % columns, row = i / columns;
-        const auto left = width * col / columns, top = height * row / rows;
-        items[i]->setLoc(panelCoordinate(int64_t(area.x) + left + col * xGap),
-                         panelCoordinate(int64_t(area.y) + top + row * yGap));
-        items[i]->setSize(int(width * (col + 1) / columns - left),
-                          int(height * (row + 1) / rows - top));
-    }
-}

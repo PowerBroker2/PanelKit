@@ -1,6 +1,38 @@
 #pragma once
 #include "Component.h"
 
+inline void panelGrid(BaseComponent* const* items, size_t count, unsigned columns,
+                      PixmapRect area, int horizontalGap = 0, int verticalGap = 0,
+                      const ComponentRegistry* owner = nullptr)
+{
+    if (!items || !count || !columns || area.width < 0 || area.height < 0) return;
+    const int64_t rows = int64_t((count - 1) / columns + 1);
+    const int xGap = columns > 1 ? max(0, min(horizontalGap, int(int64_t(area.width) / (columns - 1)))) : 0;
+    const int yGap = rows > 1 ? max(0, min(verticalGap, int(area.height / (rows - 1)))) : 0;
+    const int64_t width = max(int64_t(0), int64_t(area.width) - int64_t(xGap) * (columns - 1));
+    const int64_t height = max(int64_t(0), int64_t(area.height) - int64_t(yGap) * (rows - 1));
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (!items[i] || (owner && !owner->contains(items[i]))) continue;
+        const int64_t col = i % columns, row = i / columns;
+        const auto left = width * col / columns, top = height * row / rows;
+        items[i]->setLayoutGeometry({panelCoordinate(int64_t(area.x) + left + col * xGap),
+                                     panelCoordinate(int64_t(area.y) + top + row * yGap),
+                                     int(width * (col + 1) / columns - left),
+                                     int(height * (row + 1) / rows - top)});
+    }
+}
+
+struct PanelGridLayout
+{
+    BaseComponent* const* items;
+    size_t count;
+    unsigned columns;
+    int horizontalGap;
+    int verticalGap;
+    int padding;
+};
+
 template <size_t WIDTH, size_t HEIGHT, bool BUFFERED = true>
 class Panel : public Component<BUFFERED ? WIDTH : 1, BUFFERED ? HEIGHT : 1>, public ComponentRegistry
 {
@@ -12,16 +44,34 @@ class Panel : public Component<BUFFERED ? WIDTH : 1, BUFFERED ? HEIGHT : 1>, pub
     bool subscribed = false;
     bool fullDamage = true;
     PixmapRect damage{};
+    const PanelGridLayout* gridLayout = nullptr;
 
     void receiveGlobal(Event e)
     {
         if (!this->registry)
-            handleEvent(e);
+            this->dispatchInput(e);
     }
 
 protected:
     virtual PixmapRect contentRect() const { return {0, 0, this->dim.dx, this->dim.dy}; }
     virtual Coord contentOffset() const { return {0, 0}; }
+    virtual void reflowChildren()
+    {
+        if (!gridLayout) return;
+        auto area = visibleArea();
+        const int x = min(max(0, gridLayout->padding), area.width / 2);
+        const int y = min(max(0, gridLayout->padding), area.height / 2);
+        area = panelTranslate(area, x, y);
+        area.width -= 2 * x;
+        area.height -= 2 * y;
+        panelGrid(gridLayout->items, gridLayout->count, gridLayout->columns, area,
+                  gridLayout->horizontalGap, gridLayout->verticalGap, this);
+    }
+    void viewportChanged()
+    {
+        reflowChildren();
+        notifyViewportChanged();
+    }
 
 public:
     explicit Panel(ComponentRegistry* parentRegistry = nullptr)
@@ -71,13 +121,23 @@ public:
         if (this->registry) this->registry->invalidateRegion(region);
         else damage = panelUnion(damage, region);
     }
+    void setGridLayout(const PanelGridLayout* layout)
+    {
+        gridLayout = layout;
+        reflowChildren();
+    }
+    void childVisibilityChanged() override { reflowChildren(); }
     void setSize(int width, int height) override
     {
+        const auto old = this->getSize();
         if (BUFFERED) ComponentType::setSize(width, height);
         else BaseComponent::setSize(width, height);
+        const auto next = this->getSize();
+        if (old.dx != next.dx || old.dy != next.dy) viewportChanged();
     }
     void deactivate() override { cancelInput(); BaseComponent::deactivate(); }
     void cancelInteraction() override { cancelInput(); }
+    void dismissPopup() override { dismissPopups(); }
 
     Panel& setBackground(uint16_t color)
     {
@@ -88,7 +148,8 @@ public:
     void handleEvent(Event e) override
     {
         if (!this->isInteractive()) return;
-        const bool captured = e.type == EventType::DRAG || e.type == EventType::RELEASE;
+        const bool captured = e.type == EventType::DRAG || e.type == EventType::RELEASE ||
+                              e.type == EventType::CANCEL;
         if ((e.type == EventType::CLICK || e.type == EventType::DOUBLE_CLICK) &&
             !this->inBounds(e.endX, e.endY)) return;
         if (!captured && e.type != EventType::TYPE && !this->inBounds(e.startX, e.startY))

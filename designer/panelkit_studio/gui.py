@@ -1,7 +1,6 @@
 """Desktop editor for PanelKit project files."""
 
 import copy
-import json
 import os
 from pathlib import Path
 import re
@@ -10,10 +9,14 @@ import sys
 import tkinter as tk
 from tkinter import colorchooser, filedialog, messagebox, simpledialog, ttk
 
-from .catalog import HELP, WIDGETS
+from .catalog import WIDGETS
+from .menu import export_menu_page
+from .menu_view import export_menu_view
+from .properties import RecordValue, edit_record, numbers
+from .typefaces import TypefaceDialog, require_glyph_bridge
 from .export import export_project, SOURCE, cpp
 from .preview import Preview
-from .project import Project, Widget, load_project, save_project, validate, values
+from .project import SERIAL_FORMATS, SERIAL_PORTS, Project, Widget, load_project, save_project, validate, values
 
 SHELL = "#111923"
 CARD = "#1a2634"
@@ -24,23 +27,24 @@ MINT = "#82e7cd"
 ZOOMS = ("75%", "100%", "125%", "150%", "200%", "250%", "300%")
 
 
-def show_value(value):
-    if isinstance(value, (list, dict)):
-        return json.dumps(value, ensure_ascii=False)
-    return str(value)
+ICONS = dict(zip(WIDGETS, ("▣","↕","▤","⇳","◫","≡","Aa","▰","☑","◉","▾","☷",
+                          "⇆","▥","⏻","∿","▦","▧","±","☰","⠿","▨","◇","▩")))
+PALETTE = {f"{ICONS[kind]}  {kind}": kind for kind in WIDGETS}
+
+NUMBERS = {
+    "serial_baud":(300,8000000,300), "serial_budget":(1,1024),
+    "x":(-32768,32767), "y":(-32768,32767), "width":(1,4096), "height":(1,4096),
+    "capacity":(2,32767), "font_height":(1,512), "row_height":(1,512), "popup_rows":(1,32),
+    "interval_ms":(1,32767), "font_scale":(0.0,16.0,0.05), "step":(0.0,1000000.0,0.1),
+}
 
 
-def parse_value(text, default):
-    if isinstance(default, str):
-        return text
-    if type(default) is float:
-        return float(text)
-    if type(default) is int:
-        return int(text)
-    return json.loads(text)
+class Reader:
+    def __init__(self, get):
+        self.get = get
 
 
-class Designer:
+class Studio:
     def __init__(self, root, project):
         self.root, self.project = root, project
         self.selection = ""
@@ -94,7 +98,7 @@ class Designer:
     def build(self):
         header = ttk.Frame(self.root, padding=(18, 12))
         header.pack(fill="x")
-        ttk.Label(header, text="PanelKit Designer", style="Brand.TLabel").pack(side="left")
+        ttk.Label(header, text="PanelKit Studio", style="Brand.TLabel").pack(side="left")
         ttk.Button(header, text="Export to Arduino…", style="Accent.TButton",
                    command=self.export).pack(side="right")
         for label, callback in reversed((("New", self.new), ("Open…", self.open),
@@ -110,8 +114,8 @@ class Designer:
         panes.add(right, weight=0)
 
         ttk.Label(left, text="Widgets", style="Title.TLabel").pack(anchor="w", pady=(0,6))
-        self.palette = ttk.Combobox(left, values=tuple(WIDGETS), state="readonly", width=17)
-        self.palette.set("Button")
+        self.palette = ttk.Combobox(left, values=tuple(PALETTE), state="readonly", width=17)
+        self.palette.set(next(label for label, kind in PALETTE.items() if kind == "Button"))
         self.palette.pack(fill="x")
         ttk.Button(left, text="Add widget", command=self.add).pack(fill="x", pady=(5,12))
         ttk.Label(left, text="Object tree", style="Title.TLabel").pack(anchor="w", pady=(0,6))
@@ -167,16 +171,21 @@ class Designer:
         file_menu = tk.Menu(menu, tearoff=False)
         for label, command in (("New", self.new), ("Open…", self.open), ("Save", self.save),
                                ("Save as…", lambda: self.save(as_new=True)), ("Open demo", self.demo),
-                               ("Preview generated C++", self.preview_code), ("Export to Arduino…", self.export)):
+                               ("Preview generated C++", self.preview_code), ("Export to Arduino…", self.export),
+                               ("Export SD menu page…", self.export_sd_menu),
+                               ("Export full SD view…", self.export_sd_view)):
             file_menu.add_command(label=label, command=command)
         menu.add_cascade(label="File", menu=file_menu)
         edit = tk.Menu(menu, tearoff=False)
         for label, command in (("Undo", self.undo), ("Redo", self.redo),
+                               ("Clear history", self.clear_history),
                                ("Duplicate widget", self.duplicate), ("Remove widget", self.remove)):
             edit.add_command(label=label, command=command)
         menu.add_cascade(label="Edit", menu=edit)
         self.root.config(menu=menu)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
+        for key, handler in (("z", self.undo), ("y", self.redo)):
+            self.root.bind(f"<Control-{key}>", lambda _, fn=handler: self.history_key(fn))
         for key, handler in (("s", self.save), ("o", self.open), ("n", self.new)):
             self.root.bind(f"<Control-{key}>", lambda _, fn=handler: fn())
 
@@ -198,7 +207,7 @@ class Designer:
     def title(self):
         name = self.project.path.stem if self.project.path else "Untitled"
         dirty = self.project.to_dict() != self.saved
-        self.root.title(f"{name}{' *' if dirty else ''} · PanelKit Designer")
+        self.root.title(f"{name}{' *' if dirty else ''} · PanelKit Studio")
 
     def paint(self):
         self.preview.draw(self.project, self.selection, int(self.zoom.get()[:-1])/100)
@@ -211,7 +220,7 @@ class Designer:
             for widget in self.project.ordered():
                 parent = "widget:" + widget.parent if widget.parent else "screen_node"
                 self.tree.insert(parent, "end", "widget:" + widget.name,
-                                 text=f"{widget.name} · {widget.kind}", open=True)
+                                 text=f"{ICONS[widget.kind]}  {widget.name} · {widget.kind}", open=True)
             self.select(self.selection, True)
             self.title()
         finally:
@@ -245,109 +254,128 @@ class Designer:
         row = ttk.Frame(frame, style="Card.TFrame")
         row.pack(fill="x", pady=(2,5))
         if type(value) is bool:
-            variable = tk.BooleanVar(value=value)
-            ttk.Checkbutton(row, text=label, variable=variable).pack(anchor="w")
+            control = tk.BooleanVar(value=value)
+            ttk.Checkbutton(row,text=label,variable=control).pack(anchor="w")
         else:
-            ttk.Label(row, text=label, style="Card.TLabel").pack(anchor="w", pady=(0,2))
-            variable = tk.StringVar(value=show_value(value))
-            line = ttk.Frame(row, style="Card.TFrame")
+            ttk.Label(row,text=label,style="Card.TLabel").pack(anchor="w",pady=(0,2))
+            line = ttk.Frame(row,style="Card.TFrame")
             line.pack(fill="x")
             options = choices if choices is not None else kind.split() if " " in kind else None
             if options is not None:
-                ttk.Combobox(line, textvariable=variable, values=options,
-                             state="readonly").pack(fill="x", expand=True)
+                control = tk.StringVar(value=value)
+                ttk.Combobox(line,textvariable=control,values=options,state="readonly").pack(fill="x")
+            elif key == "selected":
+                box = ttk.Combobox(line,state="readonly")
+                box.pack(fill="x")
+                self.selected_choice = box
+                self.refresh_selection_choices(value)
+                control = Reader(lambda: max(0,box.current()))
             elif isinstance(value,(dict,list)):
-                ttk.Entry(line, textvariable=variable).pack(side="left", fill="x", expand=True)
-                ttk.Button(line, text="Edit…",
-                           command=lambda: self.edit_collection(key, variable)).pack(side="left", padx=(4,0))
+                control = RecordValue(value)
+                summary = tk.StringVar()
+
+                def update(result):
+                    origins = None
+                    if key == "columns" and isinstance(result,tuple):
+                        result,origins = result
+                    control.value = result
+                    summary.set("Default" if not result else f"{len(result)} configured")
+                    if origins is not None and "rows" in self.form:
+                        records = self.form["rows"][0]
+                        records.value = [[cells[i] if i is not None and i < len(cells) else ""
+                                          for i in origins] for cells in records.value] if origins else []
+                    if key in ("items","pages"):
+                        self.refresh_selection_choices()
+                update(value)
+                ttk.Label(line,textvariable=summary,style="Hint.TLabel").pack(side="left",fill="x",expand=True)
+                ttk.Button(line,text="Edit…",command=lambda: self.edit_collection(
+                    key,control,update)).pack(side="left")
+            elif type(default if default is not None else value) in (float,int):
+                fallback = default if default is not None else value
+                bounds = NUMBERS.get(key,(-32768,32767) if key == "value" else (0,32767))
+                if type(fallback) is float:
+                    bounds = NUMBERS.get(key,(0.0,1.0,0.05) if key == "value" and
+                                         self.project.widget(self.selection).kind == "Progress"
+                                         else (-1000000.0,1000000.0,0.1))
+                editor,get = numbers(line,value,*bounds)
+                editor.pack(fill="x")
+                control = Reader(get)
             else:
-                ttk.Entry(line, textvariable=variable).pack(side="left", fill="x", expand=True)
-                if kind in ("image", "font"):
+                control = tk.StringVar(value=value)
+                ttk.Entry(line,textvariable=control,state="readonly" if kind in ("image","font","color")
+                          else "normal").pack(side="left",fill="x",expand=True)
+                if kind in ("image","font"):
                     types = [("Headers","*.h *.hpp")] if kind == "font" else [
-                        ("Images","*.png *.jpg *.jpeg *.bmp *.webp *.gif *.tif *.tiff"), ("All files","*.*")]
-                    ttk.Button(line, text="Browse…", command=lambda: self.pick_file(variable, types)
-                               ).pack(side="left", padx=(4,0))
+                        ("Images","*.png *.jpg *.jpeg *.bmp *.webp *.gif *.tif *.tiff *.ppm"),("All files","*.*")]
+                    ttk.Button(line,text="Browse…",command=lambda: self.pick_file(control,types,kind)
+                               ).pack(side="left",padx=(4,0))
+                    ttk.Button(line,text="Clear",command=lambda: self.clear_file(control,kind)
+                               ).pack(side="left",padx=(4,0))
                 if kind == "color":
-                    ttk.Button(line, text="Pick…", command=lambda: self.pick_color(variable)
-                               ).pack(side="left", padx=(4,0))
-        self.form[key] = (variable, value if default is None else default)
+                    ttk.Button(line,text="Pick…",command=lambda: self.pick_color(control)).pack(side="left",padx=4)
+        self.form[key] = (control, None)
 
-    def edit_collection(self, name, variable):
-        try:
-            value = json.loads(variable.get())
-        except ValueError:
-            value = []
-        if name == "pages":
-            window = tk.Toplevel(self.root)
-            window.title("Tab pages")
-            window.configure(bg=CARD)
-            window.transient(self.root)
-            window.grab_set()
-            parent = self.project.widget(self.selection).parent
-            candidates = [w for w in self.project.widgets if w.parent == parent and
-                          WIDGETS[w.kind].container]
-            labels = {}
-            existing = {page: label for label, page in value}
-            ttk.Label(window, text="Enter a label to include a sibling container as a tab.",
-                      style="Card.TLabel", padding=10).pack()
-            for widget in candidates:
-                line = ttk.Frame(window, style="Card.TFrame", padding=(10,3))
-                line.pack(fill="x")
-                ttk.Label(line, text=widget.name, width=20, style="Card.TLabel").pack(side="left")
-                labels[widget.name] = tk.StringVar(value=existing.get(widget.name, ""))
-                ttk.Entry(line,textvariable=labels[widget.name]).pack(side="left",fill="x",expand=True)
-            def commit():
-                variable.set(json.dumps([[label.get(), page] for page,label in labels.items()
-                                         if label.get()], ensure_ascii=False))
-                window.destroy()
-            ttk.Button(window, text="Use tab pages", command=commit,
-                       style="Accent.TButton").pack(pady=10)
+    def refresh_selection_choices(self, index=None):
+        box = self.selected_choice
+        if box is None:
             return
-        window = tk.Toplevel(self.root)
-        window.title(name.replace("_"," ").capitalize())
-        window.configure(bg=CARD)
-        window.transient(self.root)
-        window.grab_set()
-        if name in HELP:
-            ttk.Label(window,text=HELP[name],style="Card.TLabel",
-                      wraplength=500,padding=10).pack(anchor="w")
-        plain = name == "items"
-        rows_by_line = name in ("rows", "columns", "layout")
-        if plain:
-            initial = "\n".join(value)
-        elif rows_by_line:
-            initial = "\n".join("\t".join(map(str, row)) for row in value)
-            ttk.Label(window,text="One row per line. Use tabs between columns.",
-                      style="Card.TLabel",padding=(10,2)).pack(anchor="w")
-        else:
-            initial = json.dumps(value,ensure_ascii=False,indent=2)
-        editor = tk.Text(window,width=60,height=12,bg=FIELD,fg=INK,insertbackground=INK,undo=True)
-        editor.pack(fill="both",expand=True,padx=10,pady=8)
-        editor.insert("1.0",initial)
+        index = box.current() if index is None else index
+        key = "pages" if "pages" in self.form else "items"
+        source = self.form.get(key)
+        items = source[0].get() if source else []
+        labels = [item[0] if key == "pages" else item for item in items]
+        box.configure(values=[f"{i + 1}. {label}" for i,label in enumerate(labels)] or ["No choices"])
+        box.current(min(max(0,index), max(0,len(labels)-1)))
 
-        def commit():
-            source = editor.get("1.0","end-1c")
-            try:
-                if plain:
-                    result = source.splitlines()
-                elif rows_by_line:
-                    result = [line.split("\t") for line in source.splitlines() if line]
-                    if name in ("columns","layout"):
-                        result = [[row[0], *map(int,row[1:])] for row in result]
-                else:
-                    result = json.loads(source)
-            except ValueError as error:
-                messagebox.showerror("Invalid data",str(error),parent=window)
-                return
-            variable.set(json.dumps(result,ensure_ascii=False))
-            window.destroy()
-        ttk.Button(window,text="Use values",command=commit,style="Accent.TButton").pack(pady=(0,10))
-        editor.focus_set()
+    def edit_collection(self, key, control, update):
+        widget = self.project.widget(self.selection)
+        children = []
+        if key == "pages":
+            children = [item.name for item in self.project.widgets if item.parent == widget.parent
+                        and WIDGETS[item.kind].container]
+        elif key == "layout":
+            children = [item.name for item in self.project.widgets if item.parent == widget.name]
+        columns = self.form["columns"][0].get() if key == "rows" else []
+        edit_record(self.root,key,control.get(),update,widget=widget,children=children,columns=columns)
 
-    def pick_file(self, field, types):
+    def pick_file(self, field, types, kind):
         chosen = filedialog.askopenfilename(parent=self.root, filetypes=types)
         if chosen:
             field.set(chosen)
+            if kind == "font":
+                try:
+                    source = Path(chosen).read_text(encoding="utf-8-sig")
+                    namespace = re.search(r"\bnamespace\s+([A-Za-z_]\w*)\s*\{",source)
+                    symbol = f"{namespace[1]}::Font" if namespace else ""
+                    self.form["font_symbol"][0].set(symbol)
+                except (OSError,ValueError) as error:
+                    self.error("Could not read header",error)
+
+    def clear_file(self,field,kind):
+        field.set("")
+        if kind == "font":
+            self.form["font_symbol"][0].set("")
+
+    def choose_typeface(self):
+        if not self.apply():
+            return
+        try:
+            require_glyph_bridge()
+        except ImportError:
+            self.error("Glyph Bridge required",
+                       "Install the updated Glyph Bridge checkout in the same Python environment "
+                       "to browse typefaces. The bundled Inter font and bitmap header import "
+                       "are available now. See the Studio setup guide for the install command.")
+            return
+        TypefaceDialog(self.root,self.set_typeface)
+
+    def set_typeface(self, data):
+        if data == self.project.font_embedded:
+            return
+        project = copy.deepcopy(self.project)
+        project.font_embedded = data
+        project.font_header = project.font_symbol = ""
+        self.change(project,"")
 
     def pick_color(self, field):
         _, color = colorchooser.askcolor(field.get(), parent=self.root)
@@ -357,10 +385,12 @@ class Designer:
     def code_row(self, key, title, value, height=7, signature=None):
         ttk.Label(self.event_frame,text=title,style="Card.TLabel").pack(anchor="w",pady=(4,3))
         editor = tk.Text(self.event_frame,height=height,wrap="none",bg=FIELD,fg=INK,
-                         insertbackground=MINT,relief="flat",font=("Consolas",10),undo=True)
+                         insertbackground=MINT,relief="flat",font=("Consolas",10))
         editor.pack(fill="x",pady=(0,8))
         editor.insert("1.0",value)
         self.form[key] = (editor, "")
+        for shortcut, handler in (("z", self.undo), ("y", self.redo)):
+            editor.bind(f"<Control-{shortcut}>",lambda _, fn=handler: self.history_key(fn))
         if signature is not None:
             ttk.Button(self.event_frame, text="Add widget action…",
                        command=lambda: self.widget_action(editor, signature)).pack(anchor="w", pady=(0,8))
@@ -370,61 +400,77 @@ class Designer:
         window.title("Add widget action")
         window.transient(self.root)
         window.grab_set()
-        content = ttk.Frame(window, style="Card.TFrame", padding=14)
-        content.pack(fill="both", expand=True)
-        args = [argument.split()[-1] for argument in signature.split(",") if argument.strip()]
-        target = ttk.Combobox(content, state="readonly",
-                              values=[widget.name for widget in self.project.widgets])
-        method = ttk.Combobox(content, state="readonly")
-        argument = ttk.Entry(content)
-        for title, control in (("Target widget", target), ("Action", method),
-                               ("Value", argument)):
-            ttk.Label(content, text=title, style="Card.TLabel").pack(anchor="w")
-            control.pack(fill="x", pady=(0,8))
-        ttk.Label(content, text="Use a number, true/false, or quoted text. Event values: "
-                  + (", ".join(args) if args else "none"), wraplength=360,
-                  style="Hint.TLabel").pack(anchor="w")
-        no_value = {"activate", "deactivate", "clearSamples", "close", "relayout", "invalidate"}
+        content = ttk.Frame(window,style="Card.TFrame",padding=14)
+        content.pack(fill="both",expand=True)
+        arguments = {name: kind for part in signature.split(",") if part.strip()
+                     for kind,name in [part.strip().rsplit(" ",1)]}
+        target = ttk.Combobox(content,state="readonly",values=[w.name for w in self.project.widgets])
+        method = ttk.Combobox(content,state="readonly")
+        source = ttk.Combobox(content,state="readonly")
+        for label,control in (("Target widget",target),("Action",method),("Value source",source)):
+            ttk.Label(content,text=label,style="Card.TLabel").pack(anchor="w")
+            control.pack(fill="x",pady=(0,8))
+        field = ttk.Frame(content,style="Card.TFrame")
+        field.pack(fill="x")
+        candidates, argument = {}, None
 
-        def update(_=None):
+        def update_method(_=None):
+            nonlocal argument
+            for child in field.winfo_children():
+                child.destroy()
+            argument = None
+            default = candidates.get(method.get())
+            types = {bool:{"bool"}, int:{"int","float"}, float:{"int","float"}, str:{"const char*"}}
+            same = ["Event: " + name for name,kind in arguments.items()
+                    if kind in types.get(type(default), set())]
+            source.configure(values=["Constant", *same],state="readonly" if default is not None else "disabled")
+            source.set("Constant" if default is not None else "")
+            if type(default) is bool:
+                var = tk.BooleanVar(value=default)
+                widget = ttk.Checkbutton(field,text="Enabled",variable=var)
+                argument = var.get
+            elif type(default) in (int,float):
+                bounds = NUMBERS.get("font_scale", (0.0,16.0,0.05)) if method.get() == "setFontScale" else (
+                    (-1000000.0,1000000.0,0.1) if type(default) is float else (-32768,32767))
+                widget, argument = numbers(field,default,*bounds)
+            elif isinstance(default,str):
+                widget = ttk.Entry(field)
+                widget.insert(0,default)
+                argument = widget.get
+            if argument:
+                widget.pack(fill="x")
+
+        def update_target(_=None):
+            candidates.clear()
             widget = self.project.widget(target.get())
             if not widget:
                 return
-            candidates = {"setVisible", "setOrder", "activate", "deactivate", "invalidate"}
-            candidates.update(field.method for field in WIDGETS[widget.kind].fields.values()
-                              if field.method and type(field.default) in (bool, int, float, str)
-                              and field.kind not in ("color",) and " " not in field.kind)
-            candidates.update({"Plot":{"append", "clearSamples"}, "Window":{"close"},
-                               "Flex":{"relayout"}}.get(widget.kind, set()))
+            candidates.update(setVisible=True, setOrder=0, activate=None, deactivate=None, invalidate=None)
+            candidates.update({field.method: field.default for field in WIDGETS[widget.kind].fields.values()
+                               if field.method and type(field.default) in (bool,int,float,str)
+                               and field.kind != "color" and " " not in field.kind})
+            candidates.update({"Plot":{"append":0.0,"clearSamples":None},"Window":{"close":None},
+                               "Flex":{"relayout":None}}.get(widget.kind,{}))
             method.configure(values=sorted(candidates))
             method.set("setVisible")
-            argument.delete(0,"end")
-            argument.insert(0,"true")
+            update_method()
 
         def insert():
-            if not target.get() or not method.get():
-                return
-            raw = argument.get().strip()
             try:
-                if method.get() in no_value:
-                    value = ""
-                elif raw in args:
-                    value = raw
-                else:
-                    decoded = json.loads(raw)
-                    if type(decoded) not in (bool, int, float, str):
-                        raise ValueError("Enter a number, Boolean, quoted text, or event value.")
-                    value = cpp(decoded)
+                value = source.get()[7:] if source.get().startswith("Event: ") else (
+                    cpp(argument()) if argument else "")
             except ValueError as error:
-                messagebox.showerror("Invalid value", str(error), parent=window)
+                messagebox.showerror("Invalid value",str(error), parent=window)
                 return
             if editor.get("1.0","end-1c").strip():
                 editor.insert("end-1c","\n")
             editor.insert("end-1c",f"widgets::{target.get()}.{method.get()}({value});")
             window.destroy()
-        target.bind("<<ComboboxSelected>>", update)
+
+        target.bind("<<ComboboxSelected>>",update_target)
+        method.bind("<<ComboboxSelected>>",update_method)
         target.current(0)
-        update()
+        update_target()
         ttk.Button(content,text="Insert action",command=insert,style="Accent.TButton").pack(pady=(10,0))
 
     def inspector_form(self):
@@ -432,15 +478,28 @@ class Designer:
             for child in frame.winfo_children():
                 child.destroy()
         self.form.clear()
+        self.selected_choice = None
         widget = self.project.widget(self.selection)
         frame = self.property_frame
         if not widget:
             self.inspector_title.configure(text="Screen")
+            face = self.project.font_embedded.get("label", "Custom bitmap header" if self.project.font_header else "Bundled Inter")
+            ttk.Label(frame,text=face,style="Title.TLabel",wraplength=285).pack(anchor="w")
+            ttk.Button(frame,text="Choose typeface…",command=self.choose_typeface).pack(fill="x",pady=4)
+            if self.project.font_embedded:
+                ttk.Button(frame,text="Use bundled Inter",command=lambda: self.set_typeface({})).pack(fill="x")
             for key in ("width", "height", "background", "buffered", "theme",
-                        "font_header", "font_symbol", "pins", "drag_threshold",
-                        "double_click_ms", "deferred_clicks"):
+                        "font_header", "font_symbol", "pins"):
                 kind = {"background":"color","font_header":"font"}.get(key,"")
                 self.row(frame,key,getattr(self.project,key),kind=kind)
+            ttk.Separator(frame).pack(fill="x",pady=7)
+            ttk.Label(frame,text="Input devices",style="Title.TLabel").pack(anchor="w")
+            options = {"serial_port":SERIAL_PORTS, "serial_format":SERIAL_FORMATS}
+            for key in ("touch_enabled","drag_threshold","double_click_ms","deferred_clicks",
+                        "serial_port","serial_format","serial_baud","serial_budget"):
+                self.row(frame,key,getattr(self.project,key),choices=options.get(key))
+            ttk.Label(frame,text="Touch and serial can run together. Text sends bytes to the focused widget. Commands accepts newline-delimited "
+                      "pointer, wheel and keyboard commands. Checked commands requires a CRC-8 prefix.",wraplength=260,style="Hint.TLabel").pack(anchor="w")
             for key, label in (("includes","Additional includes and declarations"),
                                ("configure_cpp","Run once after configuring widgets"),
                                ("frame_cpp","Run before each frame")):
@@ -460,7 +519,8 @@ class Designer:
             for event, signature in schema.events.items():
                 self.code_row(event,f"{event}({signature})",widget.events.get(event,""),4,signature)
             ttk.Label(self.event_frame,text="Enter the C++ callback body. Access any widget as "
-                      "widgets::object_id.",wraplength=260,style="Hint.TLabel").pack(anchor="w")
+                      "widgets::object_id. onInput receives the event type, source, coordinates and data.",
+                      wraplength=260,style="Hint.TLabel").pack(anchor="w")
         else:
             ttk.Label(self.event_frame,text="This widget has no callback properties. "
                       "Use Screen → Events & code for runtime logic.",
@@ -471,8 +531,7 @@ class Designer:
         widget = candidate.widget(self.selection)
         try:
             for key, (control, default) in self.form.items():
-                raw = control.get("1.0","end-1c") if isinstance(control,tk.Text) else control.get()
-                value = raw if type(raw) is bool else parse_value(raw,default)
+                value = control.get("1.0","end-1c") if isinstance(control,tk.Text) else control.get()
                 if not widget:
                     setattr(candidate,key,value)
                 elif key in WIDGETS[widget.kind].fields:
@@ -493,6 +552,8 @@ class Designer:
                             index = 1 if field == "pages" else 0
                             if entry[index] == self.selection:
                                 entry[index] = widget.name
+            if candidate.font_header:
+                candidate.font_embedded = {}
             validate(candidate)
         except (ValueError,TypeError,IndexError) as error:
             self.error("Check the properties",error)
@@ -509,14 +570,24 @@ class Designer:
         self.project, self.selection = project, selection
         self.refresh()
 
+    def history_key(self, action):
+        action()
+        return "break"
+
+    def clear_history(self):
+        if self.apply():
+            self.history.clear()
+            self.redo_history.clear()
+            self.status.set("Session history cleared.")
+
     def undo(self):
-        if self.history:
+        if self.apply() and self.history:
             self.redo_history.append((self.project,self.selection))
             self.project,self.selection = self.history.pop()
             self.refresh()
 
     def redo(self):
-        if self.redo_history:
+        if self.apply() and self.redo_history:
             self.history.append((self.project,self.selection))
             self.project,self.selection = self.redo_history.pop()
             self.refresh()
@@ -530,7 +601,7 @@ class Designer:
     def add(self):
         if not self.apply():
             return
-        kind = self.palette.get()
+        kind = PALETTE.get(self.palette.get(), self.palette.get())
         project = copy.deepcopy(self.project)
         selected = project.widget(self.selection)
         parent = selected.name if selected and WIDGETS[selected.kind].container else (
@@ -601,7 +672,7 @@ class Designer:
                             copy.deepcopy(self.project))
             parent = self.project.widget(selected.parent)
             if parent and (parent.kind == "Flex" or
-                           (parent.kind == "Panel" and values(parent)["grid_columns"]) or
+                           values(parent).get("grid_columns") or
                            (parent.kind == "Window" and values(parent)["fit_single_child"])):
                 self.gesture = None
                 self.status.set("The parent layout controls this widget’s geometry.")
@@ -671,6 +742,27 @@ class Designer:
             except (OSError,ValueError,TypeError) as error:
                 self.error("Could not open the project",error)
 
+    @staticmethod
+    def rebase_assets(source, path):
+        project = copy.deepcopy(source)
+        assets = [(project,"font_header",project.font_header)]
+        assets.extend((widget.properties,"image",widget.properties.get("image",""))
+                      for widget in project.widgets)
+        for owner,key,original in assets:
+            if not original:
+                continue
+            absolute = project.asset(original)
+            try:
+                rebased = os.path.relpath(absolute,path.parent)
+            except ValueError:
+                rebased = str(absolute)
+            if isinstance(owner,dict):
+                owner[key] = rebased
+            else:
+                setattr(owner,key,rebased)
+        project.path = path
+        return project
+
     def save(self, as_new=False):
         if not self.apply():
             return False
@@ -682,26 +774,15 @@ class Designer:
                 return False
             path = Path(chosen)
         try:
-            project = copy.deepcopy(self.project)
-            assets = [(project,"font_header",project.font_header)]
-            assets.extend((widget.properties,"image",widget.properties.get("image",""))
-                          for widget in project.widgets)
-            for owner,key,original in assets:
-                if not original:
-                    continue
-                absolute = project.asset(original)
-                try:
-                    result = os.path.relpath(absolute,Path(path).parent)
-                except ValueError:
-                    result = str(absolute)
-                if isinstance(owner,dict):
-                    owner[key] = result
-                else:
-                    setattr(owner,key,result)
+            path = Path(path).resolve()
+            project = self.rebase_assets(self.project,path)
             save_project(project,path)
         except (OSError,ValueError) as error:
             self.error("Could not save the project",error)
             return False
+        if self.project.path != path:
+            self.history = [(self.rebase_assets(old,path),selection) for old,selection in self.history]
+            self.redo_history = [(self.rebase_assets(old,path),selection) for old,selection in self.redo_history]
         self.project = project
         self.saved = project.to_dict()
         self.refresh()
@@ -723,6 +804,50 @@ class Designer:
         editor.insert("1.0",code)
         editor.configure(state="disabled")
         editor.pack(fill="both",expand=True)
+
+    def export_sd_view(self):
+        if not self.apply():
+            return
+        name = simpledialog.askstring("Full SD view", "Firmware view ID", parent=self.root,
+                                      initialvalue="controls")
+        if not name:
+            return
+        title = simpledialog.askstring("Full SD view", "Menu page title", parent=self.root,
+                                       initialvalue=name.replace("_", " ").title())
+        if not title:
+            return
+        target = filedialog.askdirectory(parent=self.root, title="Select output folder for C++ and PKM1")
+        if not target:
+            return
+        try:
+            outputs = export_menu_view(self.project, target, name, title)
+        except (OSError, ValueError, TypeError) as error:
+            self.error("Could not export full SD view", error)
+            return
+        self.status.set(f"Exported {len(outputs)} SD view files to {target}")
+
+    def export_sd_menu(self):
+        if not self.apply():
+            return
+        selected = self.project.widget(self.selection)
+        section = ""
+        if selected:
+            section = selected.name if WIDGETS[selected.kind].container else selected.parent
+        title = simpledialog.askstring("SD menu page", "Page title", parent=self.root,
+                                       initialvalue=section or "Menu")
+        if not title:
+            return
+        target = filedialog.asksaveasfilename(parent=self.root, defaultextension=".pkm",
+                                             initialfile=(section or "index") + ".pkm",
+                                             filetypes=[("PanelKit menu page", "*.pkm")])
+        if not target:
+            return
+        try:
+            saved = export_menu_page(self.project, target, title, section)
+        except (OSError, ValueError, TypeError) as error:
+            self.error("Could not export SD menu page", error)
+            return
+        self.status.set(f"Exported SD menu page to {saved}")
 
     def export(self):
         if not self.apply():
@@ -774,8 +899,11 @@ class Designer:
         code = ('#include "PanelKitGenerated.h"\n\n'
                 '// After initializing your display in setup():\n'
                 'panelkit_ui::configure();\n\n'
-                '// In loop(), after polling your touchscreen:\n'
-                'panelkit_ui::touch.process(pressed, x, y);\n'
+                '// Optional in setup() to initialize the configured serial port:\n'
+                'panelkit_ui::beginInputs();\n\n'
+                '// In loop() with a TeensyTFT-compatible display:\n'
+                'panelkit_ui::pollTouch(display);\n'
+                'panelkit_ui::pollInputs();\n'
                 'panelkit_ui::update();\n'
                 'panelkit_ui::present(display);')
         if new_sketch:
@@ -802,12 +930,14 @@ class Designer:
 
     def close(self):
         if self.can_close():
+            self.history.clear()
+            self.redo_history.clear()
             self.root.destroy()
 
 
 def run(path=None):
     project = load_project(path) if path else Project()
     root = tk.Tk()
-    Designer(root,project)
+    Studio(root,project)
     root.mainloop()
 

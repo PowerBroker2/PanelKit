@@ -1,6 +1,7 @@
 """Versioned project documents and validation shared by the editor and CLI."""
 
 import copy
+from importlib.resources import files
 from dataclasses import asdict, dataclass, field
 from datetime import date
 import json
@@ -45,6 +46,10 @@ class Widget:
                    properties={key: copy.deepcopy(item.default) for key, item in schema.fields.items()})
 
 
+SERIAL_PORTS = ("Off", "USB Serial", *(f"Serial{i}" for i in range(1, 9)))
+SERIAL_FORMATS = ("Text", "Commands", "Checked commands")
+
+
 @dataclass
 class Project:
     width: int = 320
@@ -55,10 +60,16 @@ class Project:
     widgets: list[Widget] = field(default_factory=list)
     font_header: str = ""
     font_symbol: str = ""
+    font_embedded: dict = field(default_factory=dict)
     pins: list[int] = field(default_factory=lambda: [10, 9, 255, 8, 2])
     drag_threshold: int = 8
     double_click_ms: int = 300
     deferred_clicks: bool = False
+    touch_enabled: bool = True
+    serial_port: str = "USB Serial"
+    serial_format: str = "Text"
+    serial_baud: int = 115200
+    serial_budget: int = 64
     includes: str = ""
     configure_cpp: str = ""
     frame_cpp: str = ""
@@ -83,7 +94,11 @@ class Project:
         path = Path(name).expanduser()
         if not path.is_absolute() and self.path:
             path = self.path.parent / path
-        return path.resolve()
+        resolved = path.resolve()
+        if (not resolved.exists() and resolved.name == "workbench.ppm" and
+                resolved.parent.name == "assets" and resolved.parent.parent.name == "panelkit_designer"):
+            return Path(str(files("panelkit_studio").joinpath("assets", "workbench.ppm")))
+        return resolved
 
     def widget(self, name):
         return next((widget for widget in self.widgets if widget.name == name), None)
@@ -236,13 +251,23 @@ def validate(project):
     check(sequence(project.pins, 5, lambda pin: integer(pin, 0, 255)), "Enter five pin numbers.")
     check(integer(project.drag_threshold, 0, 32767) and integer(project.double_click_ms, 0, 32767),
           "Invalid touch timing or drag threshold.")
-    check(all(type(flag) is bool for flag in (project.buffered, project.deferred_clicks)),
+    check(project.serial_port in SERIAL_PORTS and project.serial_format in SERIAL_FORMATS,
+          "Choose a supported serial port and format.")
+    check(integer(project.serial_baud, 300, 8000000) and integer(project.serial_budget, 1, 1024),
+          "Invalid serial baud rate or byte budget.")
+    check(all(type(flag) is bool for flag in (project.buffered, project.deferred_clicks, project.touch_enabled)),
           "Screen buffering and deferred click settings must be Boolean.")
     check(all(isinstance(s, str) for s in (project.font_header, project.font_symbol,
           project.includes, project.configure_cpp, project.frame_cpp)), "Invalid project text.")
     check(bool(project.font_header) == bool(project.font_symbol)
           and (not project.font_symbol or SYMBOL.fullmatch(project.font_symbol)),
           "Specify a font header and its qualified C++ symbol together.")
+    embedded = project.font_embedded
+    check(isinstance(embedded, dict) and (not embedded or (
+        embedded.keys() == {"label", "header", "symbol", "license"}
+        and all(isinstance(value, str) for value in embedded.values())
+        and SYMBOL.fullmatch(embedded["symbol"]) and embedded["header"]
+        and not project.font_header)), "Invalid embedded typeface.")
     names = set()
     for widget in project.widgets:
         check(widget.kind in WIDGETS, f"Unknown widget type {widget.kind}.")

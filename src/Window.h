@@ -8,9 +8,10 @@ class PanelWindow : public Panel<WIDTH, HEIGHT, false>
     Gesture gesture = Gesture::NONE;
     PanelTheme theme;
     char title[64]{};
-    PixmapRect restore{};
-    bool minimized = false, maximized = false;
-    bool snapped = false, dragged = false;
+    enum class Snap { NONE, FULL, LEFT, RIGHT, TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT };
+    Snap snap = Snap::NONE;
+    PixmapRect restore{}, moveOrigin{};
+    bool minimized = false, dragged = false;
     bool moveEnabled = true, resizeEnabled = true, closeEnabled = true;
     bool fitClient = false;
     bool raiseOnPress = true;
@@ -27,8 +28,7 @@ class PanelWindow : public Panel<WIDTH, HEIGHT, false>
         if (!fitClient || this->numComps() != 1) return;
         auto* client = this->headComponent();
         const auto area = contentRect();
-        client->setLoc(0, 0);
-        client->setSize(area.width, area.height);
+        client->setLayoutGeometry({0, 0, area.width, area.height});
     }
 
     void setGeometry(PixmapRect rect)
@@ -37,40 +37,45 @@ class PanelWindow : public Panel<WIDTH, HEIGHT, false>
         this->setSize(rect.width, rect.height);
     }
 
-    PixmapRect snapTarget(int x, int y) const
+    Snap snapTarget(int x, int y) const
     {
         if (!snapDistance || !this->registry || !this->registry->ownerComponent() || minimized)
-            return {};
+            return Snap::NONE;
         const auto area = this->registry->visibleArea();
-        if (area.width <= 0 || area.height <= 0) return {};
+        if (area.width <= 0 || area.height <= 0) return Snap::NONE;
         const int64_t right = int64_t(area.x) + area.width, bottom = int64_t(area.y) + area.height;
-        // Captured drags can reach the physical screen edge outside a nested workspace.
-        x = panelCoordinate(max(int64_t(area.x), min(right - 1, int64_t(x))));
-        y = panelCoordinate(max(int64_t(area.y), min(bottom - 1, int64_t(y))));
-        const bool leftEdge = x < int64_t(area.x) + snapDistance;
-        const bool rightEdge = x >= right - snapDistance;
-        const bool topEdge = y < int64_t(area.y) + snapDistance;
-        const bool bottomEdge = y >= bottom - snapDistance;
-        if (!leftEdge && !rightEdge) return topEdge ? area : PixmapRect{};
-        const int halfWidth = area.width / 2, halfHeight = area.height / 2;
-        const int sx = leftEdge ? area.x : area.x + halfWidth;
-        const int sw = leftEdge ? halfWidth : area.width - halfWidth;
-        if (topEdge) return {sx, area.y, sw, halfHeight};
-        if (bottomEdge) return {sx, area.y + halfHeight, sw, area.height - halfHeight};
-        return {sx, area.y, sw, area.height};
+        const int xBand = min(snapDistance, area.width / 2);
+        const int yBand = min(snapDistance, max(1, area.height / 2));
+        const bool left = x < int64_t(area.x) + xBand;
+        const bool rightSide = x >= right - xBand;
+        const bool top = y < int64_t(area.y) + yBand;
+        const bool lower = y >= bottom - yBand;
+        if (left) return top ? Snap::TOP_LEFT : lower ? Snap::BOTTOM_LEFT : Snap::LEFT;
+        if (rightSide) return top ? Snap::TOP_RIGHT : lower ? Snap::BOTTOM_RIGHT : Snap::RIGHT;
+        return top ? Snap::FULL : Snap::NONE;
     }
 
-    void applySnap(PixmapRect target)
+    PixmapRect snappedGeometry(PixmapRect area) const
     {
-        if (!target.width || !target.height) return;
-        const auto area = this->registry->visibleArea();
-        restore = this->bounds();
-        maximized = target.width == area.width && target.height == area.height;
-        snapped = !maximized;
-        setGeometry(target);
+        const int halfWidth = area.width / 2, halfHeight = area.height / 2;
+        switch (snap)
+        {
+            case Snap::TOP_LEFT: return {area.x, area.y, halfWidth, halfHeight};
+            case Snap::BOTTOM_LEFT: return {area.x, area.y + halfHeight, halfWidth, area.height - halfHeight};
+            case Snap::LEFT: return {area.x, area.y, halfWidth, area.height};
+            case Snap::TOP_RIGHT: return {area.x + halfWidth, area.y, area.width - halfWidth, halfHeight};
+            case Snap::BOTTOM_RIGHT: return {area.x + halfWidth, area.y + halfHeight, area.width - halfWidth, area.height - halfHeight};
+            case Snap::RIGHT: return {area.x + halfWidth, area.y, area.width - halfWidth, area.height};
+            default: return area;
+        }
     }
 
 protected:
+    void reflowChildren() override
+    {
+        if (fitClient && this->numComps() == 1) layoutClient();
+        else Panel<WIDTH, HEIGHT, false>::reflowChildren();
+    }
     PixmapRect contentRect() const override
     {
         return {0, min(titleHeight, this->dim.dy), this->dim.dx,
@@ -102,15 +107,24 @@ public:
     void setMinSize(int w, int h) { minWidth = max(1, w); minHeight = max(titleHeight, h); }
     void setRaiseOnPress(bool value) { raiseOnPress = value; }
     void setSnapDistance(int pixels) { snapDistance = max(0, pixels); }
-    bool isSnapped() const { return snapped || maximized; }
-    void fitSingleChild(bool value) { fitClient = value; layoutClient(); }
-    void setSize(int w, int h) override
+    bool isSnapped() const { return snap != Snap::NONE; }
+    void fitSingleChild(bool value) { fitClient = value; reflowChildren(); }
+    void registryChanged() override
     {
-        Panel<WIDTH, HEIGHT, false>::setSize(w, h);
-        layoutClient();
+        Panel<WIDTH, HEIGHT, false>::registryChanged();
+        parentViewportChanged();
+    }
+    void parentViewportChanged() override
+    {
+        if (isSnapped() && this->registry && this->registry->ownerComponent())
+            setGeometry(snappedGeometry(this->registry->visibleArea()));
+    }
+    void setLayoutGeometry(PixmapRect rect) override
+    {
+        if (!isSnapped()) setGeometry(rect);
     }
     bool isMinimized() const { return minimized; }
-    bool isMaximized() const { return maximized; }
+    bool isMaximized() const { return snap == Snap::FULL; }
     void onClose(void (*callback)()) { closed = callback; }
     void setModal(bool value)
     {
@@ -125,11 +139,11 @@ public:
     }
     void setMinimized(bool value)
     {
-        if (value == minimized || maximized) return;
+        if (value == minimized || isMaximized()) return;
         minimized = value;
         if (value)
         {
-            snapped = false;
+            snap = Snap::NONE;
             openHeight = this->dim.dy;
             this->cancelInput();
         }
@@ -138,16 +152,19 @@ public:
     }
     void setMaximized(bool value)
     {
-        if (value == maximized || !this->registry || !this->registry->ownerComponent()) return;
+        if (value == isMaximized() || !this->registry || !this->registry->ownerComponent()) return;
         if (value)
         {
             if (minimized) setMinimized(false);
-            if (!snapped) restore = this->bounds();
-            setGeometry(this->registry->visibleArea());
+            if (!isSnapped()) restore = this->bounds();
+            snap = Snap::FULL;
+            parentViewportChanged();
         }
-        else setGeometry(restore);
-        maximized = value;
-        snapped = false;
+        else
+        {
+            snap = Snap::NONE;
+            setGeometry(restore);
+        }
         this->invalidate();
     }
     void cancelInteraction() override
@@ -169,8 +186,11 @@ public:
             const bool titleBar = localY >= 0 && localY < titleHeight;
             const bool buttons = localX >= box.width - 3 * buttonWidth();
             if (moveEnabled && titleBar && !buttons)
+            {
                 gesture = Gesture::MOVE;
-            else if (resizeEnabled && !maximized && !snapped && !minimized &&
+                moveOrigin = isSnapped() ? restore : box;
+            }
+            else if (resizeEnabled && !isSnapped() && !minimized &&
                      localX >= box.width - 12 && localY >= box.height - 12)
                 gesture = Gesture::RESIZE;
             else gesture = Gesture::NONE;
@@ -188,7 +208,7 @@ public:
                     {
                         const int64_t anchor = max(int64_t(0), min(int64_t(box.width), localX));
                         const int64_t restoredAnchor = anchor * restore.width / max(1, box.width);
-                        maximized = snapped = false;
+                        snap = Snap::NONE;
                         setGeometry({panelCoordinate(int64_t(e.endX) - restoredAnchor),
                                      panelCoordinate(int64_t(e.endY) - max(int64_t(0), localY)),
                                      restore.width, restore.height});
@@ -205,7 +225,15 @@ public:
                 const bool shouldSnap = dragged && gesture == Gesture::MOVE && resizeEnabled;
                 gesture = Gesture::NONE;
                 dragged = false;
-                if (shouldSnap) applySnap(snapTarget(e.endX, e.endY));
+                if (shouldSnap)
+                {
+                    snap = snapTarget(e.endX, e.endY);
+                    if (isSnapped())
+                    {
+                        restore = moveOrigin;
+                        parentViewportChanged();
+                    }
+                }
             }
             return;
         }
@@ -216,10 +244,10 @@ public:
             switch (fromRight / buttonWidth())
             {
                 case 0: if (closeEnabled) close(); return;
-                case 1: if (resizeEnabled) setMaximized(!maximized); return;
+                case 1: if (resizeEnabled) setMaximized(!isMaximized()); return;
                 case 2: setMinimized(!minimized); return;
                 default: if (e.type == EventType::DOUBLE_CLICK && resizeEnabled)
-                             setMaximized(!maximized);
+                             setMaximized(!isMaximized());
                          return;
             }
         }

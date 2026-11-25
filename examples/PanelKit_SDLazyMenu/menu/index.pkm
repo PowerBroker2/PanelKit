@@ -1,0 +1,9 @@
+PKM1
+TITLE	Workshop menu
+TEXT	Pages are read from the SD card.
+TEXT	Choose a destination below.
+LINK	Tools	tools/index.pkm
+LINK	About	about.pkm
+LINK	Missing page	missing.pkm
+LINK	Malformed page	broken.pkm
+ACTION	Run firmware action	probe

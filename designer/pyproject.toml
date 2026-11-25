@@ -3,16 +3,19 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "panelkit-designer"
-version = "0.1.0"
+name = "panelkit-studio"
+version = "0.2.0"
 description = "Visual editor and Arduino sketch generator for PanelKit"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["Pillow>=9.1"]
+dependencies = ["Pillow>=9.2"]
+
+[project.optional-dependencies]
+fonts = ["glyph-bridge>=0.1.4"]
 
 [project.scripts]
-panelkit-designer = "panelkit_designer.__main__:main"
+panelkit-studio = "panelkit_studio.__main__:main"
 
 [tool.setuptools.package-data]
-panelkit_designer = ["assets/*"]
+panelkit_studio = ["assets/*"]
 

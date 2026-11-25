@@ -39,29 +39,46 @@ private:
 
     void receiveGlobal(Event e)
     {
-        if (!this->registry) onEvent(e);
+        if (!this->registry) this->dispatchInput(e);
     }
 
-    int calculateTextX(int textWidth) const
+    int calculateTextX(int textWidth, PixmapRect area) const
     {
         switch (hJustify)
         {
-            case TextJustify::LEFT:   return padding;
-            case TextJustify::RIGHT:  return int(WIDTH) - textWidth - padding;
+            case TextJustify::LEFT:   return area.x;
+            case TextJustify::RIGHT:  return area.x + area.width - textWidth;
             case TextJustify::CENTER:
-            default:                  return (int(WIDTH) - textWidth) / 2;
+            default:                  return area.x + (area.width - textWidth) / 2;
         }
     }
 
-    int calculateTextY(int textHeight) const
+    int calculateTextY(int height, PixmapRect area) const
     {
-        switch (vJustify)
+        int first = height, last = 0;
+        const int native = font->getHeight();
+        for (const char* code = label; *code && (first > 0 || last < height); ++code)
         {
-            case TextVAlign::TOP:    return padding;
-            case TextVAlign::BOTTOM: return int(HEIGHT) - textHeight - padding;
-            case TextVAlign::MIDDLE:
-            default:                 return (int(HEIGHT) - textHeight) / 2;
+            const auto glyph = font->lookupChar(*code);
+            if (!glyph.data || glyph.width <= 0) continue;
+            const int width = panelGlyphWidth(glyph, *code, height, native);
+            for (int y = 0; y < height; ++y)
+            {
+                if (y >= first && y < last) continue;
+                for (int x = 0; x < width; ++x)
+                    if (sampleBitmapGlyph(glyph, native, width, height, x, y))
+                    {
+                        first = min(first, y);
+                        last = max(last, y + 1);
+                        break;
+                    }
+            }
         }
+        if (first >= last) return area.y;
+        const int slack = area.height - (last - first);
+        int offset = vJustify == TextVAlign::TOP ? 0 : vJustify == TextVAlign::BOTTOM ? slack : slack / 2;
+        if (isPressed && offset < slack) ++offset;
+        return area.y + offset - first;
     }
 
 public:
@@ -158,46 +175,54 @@ public:
         return *this;
     }
 
+    PanelButton& setPadding(int pixels)
+    {
+        padding = max(0, pixels);
+        dirty = true;
+        this->invalidate();
+        return *this;
+    }
+
+    void setSize(int w, int h) override
+    {
+        const auto old = this->getSize();
+        BaseComponent::setSize(min(w, int(WIDTH)), min(h, int(HEIGHT)));
+        if (old.dx != this->dim.dx || old.dy != this->dim.dy) dirty = true;
+    }
+
     void redraw()
     {
         const uint16_t bg = isPressed ? pressedBgColor : bgColor;
-        const int radius = min(int(cornerRadius), min(int(WIDTH), int(HEIGHT)) / 2);
+        const int radius = min(int(cornerRadius), min(this->dim.dx, this->dim.dy) / 2);
         pixmap.clear();
-        for (int y = 0; y < int(HEIGHT); ++y)
+        for (int y = 0; y < this->dim.dy; ++y)
         {
-            const int distance = min(y, int(HEIGHT) - 1 - y);
+            const int distance = min(y, this->dim.dy - 1 - y);
             const int dy = max(0, radius - distance);
             const int inset = radius - int(sqrtf(float(int64_t(radius) * radius - int64_t(dy) * dy)));
-            if (int(WIDTH) <= 2 * inset)
+            if (this->dim.dx <= 2 * inset)
                 continue;
-            const bool edge = y == 0 || y == int(HEIGHT) - 1;
-            pixmap.draw_rect(inset, y, int(WIDTH) - 2 * inset, 1, 0, true, borderColor);
-            if (!edge && int(WIDTH) > 2 * inset + 2)
-                pixmap.draw_rect(inset + 1, y, int(WIDTH) - 2 * inset - 2, 1, 0, true, bg);
+            const bool edge = y == 0 || y == this->dim.dy - 1;
+            pixmap.draw_rect(inset, y, this->dim.dx - 2 * inset, 1, 0, true, borderColor);
+            if (!edge && this->dim.dx > 2 * inset + 2)
+                pixmap.draw_rect(inset + 1, y, this->dim.dx - 2 * inset - 2, 1, 0, true, bg);
         }
 
         textPixmap.clear();
-        if (label[0] && font && font->getHeight() > 0 && isfinite(fontScale) && fontScale > 0)
+        const int px = min(padding, max(0, (this->dim.dx - 1) / 2));
+        const int py = min(padding, max(0, (this->dim.dy - 1) / 2));
+        const PixmapRect content{px, py, this->dim.dx - 2 * px, this->dim.dy - 2 * py};
+        if (content.width && content.height && label[0] && font && font->getHeight() > 0 &&
+            isfinite(fontScale) && fontScale > 0)
         {
-            const int contentHeight = max(1, int(HEIGHT) - padding * 2);
-            const int height = int(max(1.0f, min(float(contentHeight), roundf(font->getHeight() * fontScale))));
-            int64_t textWidth = 0;
-            for (const char* c = label; *c; ++c)
-            {
-                const auto glyph = font->lookupChar(*c);
-                if (glyph.data && glyph.width > 0)
-                    textWidth += max(int64_t(1),
-                        (int64_t(glyph.width) * height + font->getHeight() / 2) / font->getHeight());
-                else if (*c == ' ')
-                    textWidth += height / 3;
-            }
-            const int width = int(min(int64_t(INT_MAX / 2), textWidth));
+            const int height = int(max(1.0f, min(float(content.height), roundf(font->getHeight() * fontScale))));
+            const int width = panelTextWidth(label, *font, height);
             if (BUFFERED_TEXT)
             {
-                drawCaption(textPixmap, width, height);
+                drawCaption(textPixmap, content, width, height);
                 pixmap.blit_from_pixmap(textPixmap);
             }
-            else drawCaption(pixmap, width, height);
+            else drawCaption(pixmap, content, width, height);
         }
         dirty = false;
         needsBlit = true;
@@ -206,9 +231,12 @@ public:
     void render(const PanelCanvas& canvas, int x, int y) override
     {
         update();
-        const auto loc = this->getLoc();
-        canvas.blit({x + loc.x, y + loc.y, int(WIDTH), int(HEIGHT)},
-                    pixmap.getPixels(), pixmap.getMask());
+        auto clipped = canvas;
+        const auto bounds = panelTranslate(this->bounds(), x, y);
+        clipped.clip = panelIntersection(canvas.clip, bounds);
+        clipped.blit({bounds.x, bounds.y, int(WIDTH), int(HEIGHT)},
+                     pixmap.getPixels(), pixmap.getMask());
+        this->renderDirty = false;
     }
 
     template <typename TFT>
@@ -266,12 +294,12 @@ public:
 
 private:
     template <size_t W, size_t H>
-    void drawCaption(Pixmap<W, H>& target, int width, int height)
+    void drawCaption(Pixmap<W, H>& target, PixmapRect content, int width, int height)
     {
-        target.setClipRect({padding, padding, max(0, int(WIDTH) - padding * 2),
-                            max(0, int(HEIGHT) - padding * 2)});
-        target.print(calculateTextX(width) + isPressed, calculateTextY(height) + isPressed,
-                      label, *font, textColor, height);
+        const int x = calculateTextX(width, content);
+        const bool shift = isPressed && int64_t(x) + width < int64_t(content.x) + content.width;
+        target.setClipRect(content);
+        target.print(x + shift, calculateTextY(height, content), label, *font, textColor, height);
         target.resetClipRect();
     }
 

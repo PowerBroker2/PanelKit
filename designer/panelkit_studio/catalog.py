@@ -23,11 +23,15 @@ class WidgetType:
     container: bool = False
     direct: bool = True
 
+    def __post_init__(self):
+        object.__setattr__(self, "events", self.events | {"onInput": "const Event& event"})
+
 
 THEME = props(
     theme=({}, "", "theme"),
 )
 BACKGROUND = props(background=("#192635", "setBackground", "color"))
+GRID = props(grid_columns=(0,), grid_gap=([4, 4],), grid_padding=(0,))
 TEXT = props(text=("Text", "setText"))
 CHECK = props(checked=(False, "setChecked"))
 CHOICES = props(items=(["First", "Second", "Third"], "", "items"),
@@ -44,12 +48,11 @@ IMAGE_MODES = props(mode=("FIT", "setMode", BLIT_MODES))
 CHANGE = {"onChange": "int value"}
 
 WIDGETS = {
-    "Panel": WidgetType("Panel", (180, 120), BACKGROUND | BUFFERED | props(
-        grid_columns=(0,), grid_gap=([4, 4],)), {}, True),
+    "Panel": WidgetType("Panel", (180, 120), BACKGROUND | BUFFERED | GRID, {}, True),
     "Flex": WidgetType("PanelFlex", (180, 120), BACKGROUND | props(
         axis=("VERTICAL", "", "VERTICAL HORIZONTAL"), gap=(4,), padding=(4,),
         layout=([], "", "layout")), {}, True),
-    "Window": WidgetType("PanelWindow", (196, 140), THEME | props(
+    "Window": WidgetType("PanelWindow", (196, 140), THEME | GRID | props(
         title=("Inspector", "setTitle"), features=([True, True, True], "setFeatures"),
         min_size=([80, 48], "setMinSize"), snap_distance=(12, "setSnapDistance"),
         raise_on_press=(True, "setRaiseOnPress"), fit_single_child=(False, "fitSingleChild"),
@@ -66,7 +69,8 @@ WIDGETS = {
     "Button": WidgetType("PanelButton", (86, 30), TEXT | BUFFERED | COLORS | props(
         font_scale=(0.72,), justify=("CENTER", "", "LEFT CENTER RIGHT"),
         vertical_align=("MIDDLE", "", "TOP MIDDLE BOTTOM"),
-        corner_radius=(4, "setCornerRadius")), {"onClick": "", "onDoubleClick": ""}, direct=False),
+        corner_radius=(4, "setCornerRadius"), text_padding=(4, "setPadding"),
+        menu_link=("",), menu_action=("",)), {"onClick": "", "onDoubleClick": ""}, direct=False),
     "Check Box": WidgetType("PanelCheckBox", (120, 24), THEME | TEXT | CHECK,
                             {"onChange": "bool checked"}),
     "Radio Group": WidgetType("PanelRadioGroup", (120, 72), THEME | CHOICES, CHANGE),
@@ -109,20 +113,5 @@ THEME_FIELDS = {
     "background": "color", "surface": "color", "border": "color", "accent": "color",
     "text": "color", "padding": "int", "text_height": "int",
     "font_filter": "PRESERVE_STROKES NEAREST",
-}
-
-HELP = {
-    "theme": "JSON object. Keys: " + ", ".join(THEME_FIELDS),
-    "items": 'JSON array of captions, e.g. ["Overview", "Settings"]',
-    "pages": 'JSON array of [caption, widget ID] pairs. Pages must be siblings of the tab bar.',
-    "layout": 'JSON array of [child ID, basis in pixels, weight]. Empty uses all children.',
-    "columns": 'JSON array of [caption, column width in pixels] pairs.',
-    "rows": "JSON array of rows. Each row is an array of cell strings.",
-    "image": "Path relative to the project file, or an absolute path.",
-    "pose": "JSON object. Keys: x, y, pivotX, pivotY, angle, scaleX, scaleY.",
-    "region": "JSON [x, y, width, height]. Empty uses the whole image.",
-    "colors": "JSON array of #RRGGBB strings. Buttons use background, text, pressed and border.",
-    "date": "JSON [year, month, day].",
-    "features": "JSON [movable, resizable, closable].",
 }
 

@@ -152,6 +152,7 @@ public:
         scrollX = x;
         scrollY = y;
         this->invalidate();
+        this->viewportChanged();
     }
     void setSize(int w, int h) override
     {

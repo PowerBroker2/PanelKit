@@ -2,10 +2,12 @@
 
 import calendar
 import math
+from importlib.resources import files
 
 from PIL import Image, ImageOps, ImageTk
 
 from .project import values
+from .typefaces import glyph_cells
 
 BG = "#192635"
 SURFACE = "#223345"
@@ -19,6 +21,14 @@ def intersect(first, second):
     right = min(first[0] + first[2], second[0] + second[2])
     bottom = min(first[1] + first[3], second[1] + second[3])
     return (x, y, max(0, right-x), max(0, bottom-y))
+
+
+def constrained_size(widget, width, height):
+    data = values(widget)
+    if widget.kind in ("Button", "Label", "List", "Pixmap", "Sprite") or (
+            widget.kind in ("Panel", "Plot") and data["buffered"]):
+        return min(width, widget.width), min(height, widget.height)
+    return width, height
 
 
 def layout(project):
@@ -55,24 +65,24 @@ def layout(project):
                 size = base + share
                 child = project.widget(key)
                 cw, ch = (cross, size) if vertical else (size, cross)
-                d = values(child)
-                fixed = child.kind in ("Button", "Label", "List", "Pixmap", "Sprite") or (
-                    child.kind in ("Panel", "Plot") and d["buffered"])
-                if fixed:
-                    cw, ch = min(cw, child.width), min(ch, child.height)
+                cw, ch = constrained_size(child, cw, ch)
                 slots[key] = (inset, cursor, cw, ch) if vertical else (cursor, inset, cw, ch)
                 cursor += size + gap
-        if parent and parent.kind == "Panel" and (cols := values(parent)["grid_columns"]) and members:
+        if parent and (cols := values(parent).get("grid_columns")) and members:
             rows = (len(members) + cols - 1) // cols
-            gx, gy = values(parent)["grid_gap"]
-            gx = max(0, min(gx, width // (cols - 1))) if cols > 1 else 0
-            gy = max(0, min(gy, height // (rows - 1))) if rows > 1 else 0
-            space_x, space_y = width - gx*(cols-1), height - gy*(rows-1)
+            p = values(parent)
+            gx, gy = p["grid_gap"]
+            px, py = min(p["grid_padding"],width//2), min(p["grid_padding"],height//2)
+            available_x, available_y = width-2*px, height-2*py
+            gx = max(0, min(gx, available_x // (cols - 1))) if cols > 1 else 0
+            gy = max(0, min(gy, available_y // (rows - 1))) if rows > 1 else 0
+            space_x, space_y = available_x - gx*(cols-1), available_y - gy*(rows-1)
             for i, child in enumerate(members):
                 row, col = divmod(i, cols)
                 left, top = space_x*col//cols, space_y*row//rows
                 cw, ch = space_x*(col+1)//cols-left, space_y*(row+1)//rows-top
-                slots[child.name] = (left+col*gx,top+row*gy,cw,ch)
+                cw,ch = constrained_size(child,cw,ch)
+                slots[child.name] = (px+left+col*gx,py+top+row*gy,cw,ch)
 
         for widget in sorted(members, key=lambda child: child.order):
             if not widget.visible or widget.name in hidden:
@@ -80,7 +90,7 @@ def layout(project):
             p = values(widget)
             box = slots.get(widget.name, (widget.x, widget.y, widget.width, widget.height))
             if parent and parent.kind == "Window" and len(members) == 1 and values(parent)["fit_single_child"]:
-                box = (0, 0, width, height)
+                box = (0, 0, *constrained_size(widget,width,height))
             wx, wy, ww, wh = box
             if widget.kind == "Window" and p["maximized"]:
                 wx, wy, ww, wh = 0, 0, width, height
@@ -111,6 +121,9 @@ class Preview:
     def __init__(self, canvas):
         self.canvas = canvas
         self.images = {}
+        self.caption_images = {}
+        self.fonts = {}
+        self.bundled_font = files("panelkit_studio").joinpath("assets","font_inter_regular_16.h").read_text(encoding="ascii")
         self.drawn = []
         self.origin = (22, 22)
         self.scale = 1
@@ -192,6 +205,91 @@ class Preview:
         c.create_text(ox, bottom+12, anchor="w", fill=MUTED,
                       text=f"{project.width} × {project.height}  •  {scale:.0%}",
                       font=("Segoe UI", 9))
+
+    def bitmap_cells(self, project):
+        if project.font_embedded:
+            return glyph_cells(project.font_embedded["header"])
+        if not project.font_header:
+            return glyph_cells(self.bundled_font)
+        try:
+            path = project.asset(project.font_header)
+            key = (path,path.stat().st_mtime_ns)
+            if key not in self.fonts:
+                self.fonts = {key:glyph_cells(path.read_text(encoding="utf-8-sig"))}
+            return self.fonts[key]
+        except (OSError,ValueError):
+            return {}
+
+    def button_caption(self, project, properties, box, clip, color, tag):
+        label = properties["text"][:31]
+        cells = self.bitmap_cells(project)
+        if properties["font_scale"] <= 0:
+            return True
+        if not label or not cells:
+            return bool(cells)
+        _,_,width,height = box
+        px = min(properties["text_padding"],max(0,(width-1)//2))
+        py = min(properties["text_padding"],max(0,(height-1)//2))
+        room_x,room_y = width-2*px,height-2*py
+        if room_x <= 0 or room_y <= 0:
+            return True
+        native = next(iter(cells.values())).height
+        out_height = max(1,min(room_y,int(native*properties["font_scale"]+0.5)))
+        sizes = [(cells[c],max(1,(cells[c].width*out_height+native//2)//native)) if c in cells
+                 else (None,out_height//3 if c == " " else 0) for c in label]
+        total = sum(size for _,size in sizes)
+        if not total or total*out_height > 1000000:
+            return True
+        x,y = box[:2]
+        crop = (max(x+px,clip[0])-x,max(y+py,clip[1])-y,
+                min(x+width-px,clip[0]+clip[2])-x,min(y+height-py,clip[1]+clip[3])-y)
+        if crop[0] >= crop[2] or crop[1] >= crop[3]:
+            return True
+        key = (id(cells),label,width,height,px,py,out_height,properties["justify"],
+               properties["vertical_align"],color,crop,self.scale)
+        cached = self.caption_images.get(key)
+        if cached is not None and cached[0] is cells:
+            photo = cached[1]
+        else:
+            run = Image.new("L",(total,out_height))
+            start = 0
+            for glyph,advance in sizes:
+                if glyph:
+                    if (advance,out_height) == glyph.size:
+                        mask = glyph
+                    else:
+                        mask = Image.new("L",(advance,out_height))
+                        for row in range(out_height):
+                            y0 = row*native//out_height
+                            y1 = max(y0+1,(row+1)*native//out_height)
+                            for col in range(advance):
+                                x0 = col*glyph.width//advance
+                                x1 = max(x0+1,(col+1)*glyph.width//advance)
+                                if glyph.crop((x0,y0,x1,y1)).getbbox():
+                                    mask.putpixel((col,row),255)
+                    run.paste(mask,(start,0))
+                start += advance
+            ink = run.getbbox()
+            if not ink:
+                return True
+            slack = room_y-(ink[3]-ink[1])
+            dy = {"TOP":0,"MIDDLE":slack//2,"BOTTOM":slack}[properties["vertical_align"]]
+            slack_x = room_x-total
+            dx = {"LEFT":0,"CENTER":int(slack_x/2),"RIGHT":slack_x}[properties["justify"]]
+            mask = Image.new("L",(crop[2]-crop[0],crop[3]-crop[1]))
+            mask.paste(run,(px+dx-crop[0],py+dy-ink[1]-crop[1]))
+            layer = Image.new("RGBA",mask.size,color)
+            layer.putalpha(mask)
+            photo = ImageTk.PhotoImage(layer.resize((max(1,round(layer.width*self.scale)),
+                max(1,round(layer.height*self.scale))), Image.Resampling.NEAREST))
+            if len(self.caption_images) >= 64:
+                self.caption_images.clear()
+            self.caption_images[key] = (cells,photo)
+        self.drawn.append(photo)
+        self.canvas.create_image(self.origin[0]+(x+crop[0])*self.scale,
+                                 self.origin[1]+(y+crop[1])*self.scale,
+                                 image=photo,anchor="nw",tags=tag)
+        return True
 
     def widget(self, project, widget, box, clip):
         x, y, w, h = box
@@ -333,12 +431,29 @@ class Preview:
                 rect(a,b,end,b+row_height,accent if i == p.get("selected",-1) else surface,border)
                 text(a+3,b+row_height/2,label,end-a-5)
             return
-        rect(0,0,w,h,surface,border)
+        if kind != "Button":
+            rect(0,0,w,h,surface,border)
         if kind == "Button":
-            colors = p["colors"]
-            if colors:
-                rect(0,0,w,h,colors[0],colors[3] if len(colors)>3 else border)
-            text(w/2,h/2,p["text"],w-6,colors[1] if colors else ink,anchor="center")
+            colors = p["colors"] or ["#424142","#ffffff","#212021","#7b7d7b"]
+            background, color = colors[:2]
+            edge = colors[3] if len(colors) == 4 else background
+            radius = min(p["corner_radius"],min(w,h)//2)
+            for row in range(clip_top,clip_bottom):
+                distance = min(row,h-1-row)
+                dy = max(0,radius-distance)
+                inset = radius-math.isqrt(radius*radius-dy*dy)
+                rect(inset,row,w-inset,row+1,edge)
+                if 0 < row < h-1:
+                    rect(inset+1,row,w-inset-1,row+1,background)
+            if not self.button_caption(project,p,box,clip,color,tag):
+                inset = min(p["text_padding"],max(0,min(w,h)//2))
+                ax = {"LEFT":inset,"CENTER":w/2,"RIGHT":w-inset}[p["justify"]]
+                ay = {"TOP":inset,"MIDDLE":h/2,"BOTTOM":h-inset}[p["vertical_align"]]
+                anchor = {"TOP":"n","MIDDLE":"","BOTTOM":"s"}[p["vertical_align"]] + {
+                          "LEFT":"w","CENTER":"","RIGHT":"e"}[p["justify"]]
+                if p["text"]:
+                    c.create_text(x+ax*s,y+ay*s,text=p["text"],fill=color,anchor=anchor or "center",
+                                  font=("Segoe UI",max(7,round(14*p["font_scale"]*s))),tags=tag)
         elif kind == "Combo Box":
             items = p["items"]
             text(5,h/2,items[min(p["selected"],len(items)-1)] if items else "",w-20)

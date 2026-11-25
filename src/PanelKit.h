@@ -3,6 +3,7 @@
 #include <Callback.h>
 #include "PixelPlanner.h"
 #include "Events.h"
+#include "Input.h"
 #include "Component.h"
 #include "Panel.h"
 #include "Button.h"
@@ -13,3 +14,6 @@
 #include "Layout.h"
 #include "Extras.h"
 #include "Picture.h"
+
+#include "Dialog.h"
+#include "Menu.h"

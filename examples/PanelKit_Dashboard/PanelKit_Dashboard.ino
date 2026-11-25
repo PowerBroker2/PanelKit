@@ -11,7 +11,8 @@ PanelToggle running(52, 22, &controls);
 Pixmap<64, 32> spriteSheet;
 Component<86, 86> dial(&dashboard);
 PanelSprite<86, 86, 64, 32> needle(spriteSheet, {32, 0, 32, 32}, &dashboard);
-TouchProcessor touch;
+PanelInput input;
+PanelTouchInput touch(input);
 bool ready = false;
 uint32_t lastFrame = 0;
 float phase = 0;
@@ -20,6 +21,7 @@ void setup()
 {
     Serial.begin(115200);
     ready = display.begin();
+    input.setBounds(display.width(), display.height());
     if (!ready)
     {
         Serial.println("Display initialization failed.");
@@ -56,9 +58,13 @@ void setup()
 void loop()
 {
     if (!ready) return;
-    if (Serial.read() == 'c') display.calibrateTouch();
-    const bool pressed = display.touched();
-    touch.process(pressed, display.touchX(), display.touchY());
+    if (Serial.read() == 'c')
+    {
+        touch.disconnect();
+        display.calibrateTouch();
+    }
+    touch.pollDisplay(display);
+    input.tick();
 
     const uint32_t now = millis();
     if (running.isChecked() && now - lastFrame >= 50)

@@ -1,0 +1,5 @@
+PKM1
+TITLE	Advanced view
+TEXT	Relative link from a nested folder.
+LINK	About the project	../../about.pkm
+LINK	Tools menu	../index.pkm

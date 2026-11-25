@@ -28,7 +28,9 @@ protected:
     bool registered = false;
     bool visible    = true;
     bool renderDirty = true;
+    bool overlay = false;
 
+    void (*inputSlot)(const Event&) = nullptr;
     friend class ComponentRegistry;
 
 public:
@@ -44,7 +46,13 @@ public:
     BaseComponent(const BaseComponent&) = delete;
     BaseComponent& operator=(const BaseComponent&) = delete;
 
-    virtual void activate()   { active = true; invalidate(); }
+    virtual void activate()
+    {
+        const bool changed = !active;
+        active = true;
+        invalidate();
+        if (changed && registry) registry->childVisibilityChanged();
+    }
     virtual void deactivate() { active = false; invalidate(); }
     bool isActive() const { return active; }
     virtual bool isInteractive() const { return active && visible; }
@@ -55,6 +63,7 @@ public:
         visible = value;
         if (!visible) cancelInteraction();
         invalidate();
+        if (registry) registry->childVisibilityChanged();
     }
     virtual void invalidate()
     {
@@ -102,6 +111,14 @@ public:
     }
 
     int getOrder() const { return order; }
+    /** Draw above popups and modals in this registry, without taking input. */
+    void setOverlay(bool value)
+    {
+        if (overlay == value) return;
+        overlay = value;
+        if (registry) registry->invalidateRegistry();
+        else invalidate();
+    }
     void setLoc(int x, int y)
     {
         if (x != ulhc.x || y != ulhc.y)
@@ -129,6 +146,22 @@ public:
     {
         return x >= ulhc.x && y >= ulhc.y &&
                int64_t(x) - ulhc.x < dim.dx && int64_t(y) - ulhc.y < dim.dy;
+    }
+
+    virtual void parentViewportChanged() {}
+    virtual void setLayoutGeometry(PixmapRect rect)
+    {
+        setLoc(rect.x, rect.y);
+        setSize(rect.width, rect.height);
+    }
+
+    void onInput(void (*slot)(const Event&)) { inputSlot = slot; }
+    void dispatchInput(Event event)
+    {
+        if (!isInteractive()) return;
+        if (inputSlot) inputSlot(event);
+        handleEvent(event);
+        if (event.type == EventType::CANCEL) cancelInteraction();
     }
 
     virtual void handleEvent(Event) {}

@@ -4,13 +4,13 @@ from pathlib import Path
 
 from PIL import Image
 
-from panelkit_designer import Project, Widget, export_project, load_project, save_project
-from panelkit_designer.catalog import WIDGETS
-from panelkit_designer.demo import demo_project
-from panelkit_designer.export import ASSETS, HEADER, SOURCE, cpp
+from panelkit_studio import Project, Widget, export_project, load_project, save_project
+from panelkit_studio.catalog import WIDGETS
+from panelkit_studio.demo import demo_project
+from panelkit_studio.export import ASSETS, HEADER, SOURCE, cpp
 
 
-class DesignerExportTests(unittest.TestCase):
+class StudioExportTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -77,11 +77,61 @@ class DesignerExportTests(unittest.TestCase):
         self.assertIn("pixels_0_mask[] PROGMEM", arrays)
         source = (target / SOURCE).read_text()
         self.assertIn("setSource(pixels_0, 2, 3, true, pixels_0_mask)", source)
-        self.assertIn("panelGrid(", source)
+        self.assertIn(".setGridLayout(", source)
         self.assertIn("blitFromArray(pixels_0", source)
         widget.properties["region"] = [0, 0, 3, 3]
         with self.assertRaisesRegex(ValueError, "sprite region"):
             export_project(project, target)
+
+    def test_reexport_migrates_legacy_headers_and_keeps_typeface(self):
+        sketch = self.root / "Legacy"
+        project = Project()
+        path = project.asset(self.root/"panelkit_designer"/"assets"/"workbench.ppm")
+        self.assertTrue(path.is_file())
+        export_project(project, sketch)
+        header = sketch / HEADER
+        previous = header.read_text(encoding="utf-8").replace("PanelKit Studio", "PanelKit Designer")
+        header.write_text(previous,encoding="utf-8")
+        project.font_embedded = {
+            "label": "Custom face", "symbol": "custom::Font",
+            "header": "#pragma once\n// Embedded bitmap\n", "license": "Example font license\n",
+        }
+        saved = save_project(project,self.root/"Legacy.panelkit.json")
+        export_project(load_project(saved),sketch)
+        self.assertIn("PanelKit Studio",header.read_text(encoding="utf-8"))
+        self.assertIn("&custom::Font",(sketch/SOURCE).read_text(encoding="utf-8"))
+        self.assertIn("Embedded bitmap",(sketch/"PanelKitFont.h").read_text(encoding="utf-8"))
+        self.assertIn("Example font license",(sketch/"PanelKitTypeface-License.txt").read_text(encoding="utf-8"))
+
+    def test_input_settings_and_typed_slot_export(self):
+        project = Project(touch_enabled=False, serial_port="Serial2", serial_format="Commands",
+                          serial_baud=57600, serial_budget=24)
+        button = Widget.create("Button", "confirm")
+        button.events["onInput"] = "if (event.type == EventType::PRESS) widgets::confirm.invalidate();"
+        project.widgets.append(button)
+        saved = save_project(project, self.root / "Input.panelkit.json")
+        project = load_project(saved)
+        target = self.root / "InputDemo"
+        export_project(project, target)
+        source = (target / SOURCE).read_text()
+        starter = (target / "InputDemo.ino").read_text()
+        for fragment in ("Serial2.begin(57600UL)", "serialInput.poll(Serial2, 24)",
+                         "PanelStreamMode::COMMANDS", "onInput(", "const Event& event"):
+            self.assertIn(fragment, source)
+        self.assertNotIn("PanelTouchInput", (target / HEADER).read_text())
+        self.assertIn("panelkit_ui::pollTouch(display)", starter)
+        self.assertIn("panelkit_ui::pollInputs()", starter)
+        project.serial_format = "Checked commands"
+        export_project(project, target)
+        self.assertIn("PanelStreamMode::CHECKED_COMMANDS", (target / SOURCE).read_text())
+        project.serial_port = "Off"
+        project.touch_enabled = True
+        export_project(project, target)
+        self.assertEqual(starter, (target / "InputDemo.ino").read_text())
+        self.assertIn("touchInput.pollDisplay(display)", (target / HEADER).read_text())
+        self.assertIn("PanelTouchInput touchInput(input);", (target / SOURCE).read_text())
+        self.assertNotIn("PanelStreamInput", (target / HEADER).read_text())
+        self.assertNotIn("Serial2", (target / SOURCE).read_text())
 
     def test_invalid_references_and_cpp_escaping(self):
         project = Project(widgets=[Widget.create("Panel", "loop", parent="loop")])

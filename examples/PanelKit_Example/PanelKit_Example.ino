@@ -13,7 +13,8 @@ PanelList<146, 134> menu(&panel);
 const char* const items[] = {"Overview", "Sensors", "Outputs", "Display",
                              "Controls", "Logging", "About"};
 
-TouchProcessor touchProcessor;
+PanelInput input;
+PanelTouchInput touch(input);
 bool ready = false;
 
 void onOkClicked() {
@@ -28,6 +29,7 @@ void onCancelClicked() {
 void setup() {
     Serial.begin(115200);
     ready = display.begin();
+    input.setBounds(display.width(), display.height());
     if (!ready)
         return;
 
@@ -67,18 +69,17 @@ void setup() {
     panel.present(display);
 
     // Use immediate clicks for buttons and list rows.
-    touchProcessor.setDeferredClickMode(false);
+    input.gestures().setDeferredClickMode(false);
 
     // Or set it to Immediate Mode (instant response, double clicks fire after single click)
-    // touchProcessor.setDeferredClickMode(false);
+    // input.gestures().setDeferredClickMode(false);
 }
 
 void loop() {
     if (!ready) return;
     // Process incoming hardware touch coordinates
-    touchProcessor.process(display.touched(),
-                           display.touchX(),
-                           display.touchY());
+    touch.pollDisplay(display);
+    input.tick();
 
     // Update internal button state and redraw pixmaps if dirty
     panel.present(display);

@@ -11,7 +11,9 @@ enum class EventType { CLICK,
                        TYPE,
                        PRESS,
                        RELEASE,
-                       DRAG };
+                       DRAG,
+                       MOVE,
+                       CANCEL };
 
 struct Event
 {
@@ -23,6 +25,7 @@ struct Event
     int           endX;
     int           endY;
     float         direction;
+    uint8_t       source; // 0 for legacy event helpers
 };
 
 // Declare that the signal exists globally
@@ -69,6 +72,7 @@ private:
     static constexpr size_t MAX_BUFFER_SIZE = 4;
     Event  eventBuffer[MAX_BUFFER_SIZE];
     size_t eventCount;
+    uint8_t eventSource = 0;
 
     // Internal helper to construct Event objects
     Event createEvent(EventType type, int sX, int sY, int eX, int eY, float dir = 0.0f) const
@@ -82,6 +86,7 @@ private:
         e.endX      = eX;
         e.endY      = eY;
         e.direction = dir;
+        e.source    = eventSource;
         return e;
     }
 
@@ -164,16 +169,36 @@ public:
 
     void emitPendingEvents()
     {
-        for (size_t i = 0; i < eventCount; ++i)
-        {
-            getEventSignal().fire(eventBuffer[i]);
-        }
+        Event pending[MAX_BUFFER_SIZE];
+        const size_t count = eventCount;
+        for (size_t i = 0; i < count; ++i) pending[i] = eventBuffer[i];
         eventCount = 0;
+        for (size_t i = 0; i < count; ++i) getEventSignal().fire(pending[i]);
     }
 
     void clearEvents()
     {
         eventCount = 0;
+    }
+
+    void setEventSource(uint8_t source) { eventSource = source; }
+    void finishClickSequence()
+    {
+        const bool emitClick = deferredClickMode && hasPendingClick;
+        hasPendingClick = false;
+        if (emitClick)
+        {
+            queueEvent(createEvent(EventType::CLICK, lastClickStartX, lastClickStartY, lastClickX, lastClickY));
+            if (autoEmit) emitPendingEvents();
+        }
+    }
+    void cancel()
+    {
+        const bool held = wasTouched;
+        wasTouched = isDragging = hasPendingClick = false;
+        eventCount = 0;
+        if (held) queueEvent(createEvent(EventType::CANCEL, lastX, lastY, lastX, lastY));
+        if (autoEmit) emitPendingEvents();
     }
 
     // --- Main Gesture State Machine ---

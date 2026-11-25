@@ -167,7 +167,7 @@ class PanelList : public Component<WIDTH, HEIGHT>
 
     void scrollBy(int64_t pixels)
     {
-        const int64_t maxOffset = max(int64_t(0), int64_t(count) * rowHeight - int(HEIGHT));
+        const int64_t maxOffset = max(int64_t(0), int64_t(count) * rowHeight - this->dim.dy);
         const int next = int(max(int64_t(0), min(min(int64_t(INT_MAX), maxOffset),
                                                  int64_t(offset) + pixels)));
         if (next != offset) { offset = next; this->invalidate(); }
@@ -192,6 +192,11 @@ public:
         this->invalidate();
     }
     int selectedIndex() const { return selected; }
+    void setSize(int w, int h) override
+    {
+        Component<WIDTH, HEIGHT>::setSize(w, h);
+        scrollBy(0);
+    }
     void onChange(void (*callback)(int)) { changed = callback; }
 
     void handleEvent(Event e) override
@@ -219,15 +224,15 @@ public:
         {
             auto& image = this->pixmap;
             image.clear();
-            image.draw_rect(0, 0, WIDTH, HEIGHT, 0, true, RGB565(20, 32, 48));
+            image.draw_rect(0, 0, this->dim.dx, this->dim.dy, 0, true, RGB565(20, 32, 48));
             int y0 = -(offset % rowHeight);
-            for (int row = offset / rowHeight; row < count && y0 < int(HEIGHT); ++row)
+            for (int row = offset / rowHeight; row < count && y0 < this->dim.dy; ++row)
             {
-                image.draw_rect(0, y0, WIDTH, rowHeight - 1, 0, true,
+                image.draw_rect(0, y0, this->dim.dx, rowHeight - 1, 0, true,
                                 row == selected ? RGB565(30, 110, 126) : RGB565(31, 47, 64));
                 if (font && items[row])
                     image.print(5, y0 + 2, items[row], *font, WHITE, rowHeight - 4);
-                if (int64_t(y0) + rowHeight >= int(HEIGHT))
+                if (int64_t(y0) + rowHeight >= this->dim.dy)
                     break;
                 y0 += rowHeight;
             }
